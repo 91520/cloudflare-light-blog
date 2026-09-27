@@ -24,9 +24,9 @@ database_name = "blog-db"
 # Workers & Pages > 你的 Worker > Settings > Bindings > Add > R2 Bucket
 # 变量名填 R2，选择你创建的 blog-images 存储桶
 # ============================================
-# [[r2_buckets]]
-# binding = "R2"
-# bucket_name = "blog-images"
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "blog-images"
 
 # CORS 配置已迁移至后台网站设置中
 # [vars]
