@@ -341,7 +341,7 @@ export function getAdminHTML() {
                 </tr>
               </thead>
               <tbody>
-                <template v-for="(post, idx) in posts.slice((postPage-1)*postPageSize, postPage*postPageSize)" :key="post.id">
+                <template v-for="post in posts" :key="post.id">
                   <tr style="border-top:1px solid #e8e0cc">
                     <td style="padding:14px 16px;text-align:center;white-space:nowrap"><button class="delete" @click="deletePost(post.id)" style="padding:5px 14px;border:none;border-radius:50px;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.2s;white-space:nowrap">删除</button></td>
                     <td style="padding:14px 16px;text-align:center;white-space:nowrap"><button class="edit" @click="toggleEdit(post)" style="padding:5px 14px;border:none;border-radius:50px;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.2s;white-space:nowrap">编辑</button></td>
@@ -365,10 +365,10 @@ export function getAdminHTML() {
               </tbody>
             </table>
           </div>
-          <div v-if="Math.ceil(posts.length / postPageSize) > 1" style="display:flex;justify-content:center;gap:8px;margin-top:16px">
-            <button class="btn btn-cancel" @click="postPage=Math.max(1,postPage-1)" :style="{opacity:postPage<=1?0.4:1}" :disabled="postPage<=1" style="padding:8px 16px;font-size:14px">上一页</button>
-            <span style="display:flex;align-items:center;color:#725d42;font-weight:600;font-size:14px">{{postPage}} / {{Math.ceil(posts.length / postPageSize)}}</span>
-            <button class="btn btn-cancel" @click="postPage=Math.min(Math.ceil(posts.length/postPageSize),postPage+1)" :style="{opacity:postPage>=Math.ceil(posts.length/postPageSize)?0.4:1}" :disabled="postPage>=Math.ceil(posts.length/postPageSize)" style="padding:8px 16px;font-size:14px">下一页</button>
+          <div v-if="Math.ceil(postTotal / postPageSize) > 1" style="display:flex;justify-content:center;gap:8px;margin-top:16px">
+            <button class="btn btn-cancel" @click="loadPosts(postPage-1)" :style="{opacity:postPage<=1?0.4:1}" :disabled="postPage<=1" style="padding:8px 16px;font-size:14px">上一页</button>
+            <span style="display:flex;align-items:center;color:#725d42;font-weight:600;font-size:14px">{{postPage}} / {{Math.ceil(postTotal / postPageSize)}}</span>
+            <button class="btn btn-cancel" @click="loadPosts(postPage+1)" :style="{opacity:postPage>=Math.ceil(postTotal/postPageSize)?0.4:1}" :disabled="postPage>=Math.ceil(postTotal/postPageSize)" style="padding:8px 16px;font-size:14px">下一页</button>
           </div>
           </div>
           </div>
@@ -496,7 +496,7 @@ export function getAdminHTML() {
                       <td style="padding:14px 16px;text-align:center;white-space:nowrap"><button class="edit" @click="editingCategory===cat.id?editingCategory=null:editCategory(cat)" style="padding:5px 14px;border:none;border-radius:50px;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.2s;white-space:nowrap">{{editingCategory===cat.id?'收起':'编辑'}}</button></td>
                       <td style="padding:14px 16px;color:#9f927d;font-size:15px">/{{cat.slug}}</td>
                       <td style="padding:14px 16px;color:#794f27;font-weight:600;font-size:16px">{{cat.name}}</td>
-                      <td style="padding:14px 16px;text-align:center;color:#19c8b9;font-weight:700;font-size:15px">{{posts.filter(p => p.category === cat.name).length}}</td>
+                      <td style="padding:14px 16px;text-align:center;color:#19c8b9;font-weight:700;font-size:15px">{{categoryCounts[cat.name] || 0}}</td>
                     </tr>
                     <tr v-if="editingCategory===cat.id">
                       <td colspan="5" style="padding:16px;background:#faf8f2;border-top:2px solid #e8e0cc">
@@ -775,6 +775,7 @@ export function getAdminHTML() {
         const username = ref('');
         const password = ref('');
         const posts = ref([]);
+        const categoryCounts = ref({});
         const editingId = ref(null);
         const form = ref({ title: '', content: '', category: '', tags: '', status: 'published', cover_image: '', password: '', passwordType: '', hadPassword: false, published_at: new Date().toISOString().split('T')[0] });
         const coverPreview = ref('');
@@ -800,7 +801,7 @@ export function getAdminHTML() {
         const iconList = ref([]);
         const emojiLoading = ref(false);
         const loadedIconfontUrl = ref('');
-        const check = () => { const t = localStorage.getItem('token'); if (t) { logged.value = true; const savedPage = localStorage.getItem('adminPage') || 'posts'; currentPage.value = (savedPage === 'profile' || savedPage === 'appearance') ? 'personal' : savedPage; loadPosts(); loadCategories(); loadSettings(); loadTrash(); loadAgentKeys(); if (currentPage.value === 'images') loadImages(); } };
+        const check = () => { const t = localStorage.getItem('token'); if (t) { logged.value = true; const savedPage = localStorage.getItem('adminPage') || 'posts'; currentPage.value = (savedPage === 'profile' || savedPage === 'appearance') ? 'personal' : savedPage; loadPosts(); loadCategories(); loadSettings(); if (currentPage.value === 'trash') loadTrash(); if (currentPage.value === 'settings') loadAgentKeys(); if (currentPage.value === 'images') loadImages(); } };
         const api = (url, o = {}) => {
           o.headers = o.headers || {};
           o.headers['Authorization'] = 'Bearer ' + localStorage.getItem('token');
@@ -812,9 +813,9 @@ export function getAdminHTML() {
             throw e;
           });
         };
-        const login = async () => { try { const r = await axios.post('/api/login', { username: username.value, password: password.value }); if (r.data.success) { localStorage.setItem('token', r.data.token); logged.value = true; loadPosts(); loadCategories(); loadSettings(); loadTrash(); } } catch (e) { alert(e.response ? e.response.data.error || '登录失败' : '登录失败'); } };
+        const login = async () => { try { const r = await axios.post('/api/login', { username: username.value, password: password.value }); if (r.data.success) { localStorage.setItem('token', r.data.token); logged.value = true; loadPosts(); loadCategories(); loadSettings(); } } catch (e) { alert(e.response ? e.response.data.error || '登录失败' : '登录失败'); } };
         const logout = () => { localStorage.removeItem('token'); logged.value = false; };
-        const loadPosts = async () => { try { const r = await api('/api/admin/posts'); posts.value = r.data; } catch (e) { showToast('加载文章失败'); } };
+        const loadPosts = async (page = postPage.value) => { try { const r = await api('/api/admin/posts?page=' + page); posts.value = r.data.data; postTotal.value = r.data.total; categoryCounts.value = r.data.categoryCounts || {}; postPage.value = page; if (page > 1 && !posts.value.length && postTotal.value) await loadPosts(page - 1); } catch (e) { showToast('加载文章失败'); } };
         const loadCategories = async () => { try { const r = await api('/api/categories'); categories.value = r.data; } catch (e) { showToast('加载分类失败'); } };
         const loadSettings = async () => { try { const r = await api('/api/admin/settings'); const pinnedId = r.data.pinned_post_id || ''; sitePasswordSet.value = r.data.site_password_set === '1'; settingsForm.value = { site_name: r.data.site_name || '', site_description: r.data.site_description || '', site_bio: r.data.site_bio || '', site_links: r.data.site_links || '', site_author: r.data.site_author || '', site_footer: r.data.site_footer || '', custom_js: r.data.custom_js || '', iconfont_css: r.data.iconfont_css || '', site_theme: r.data.site_theme || 'animal-forest', allow_robots: r.data.allow_robots || '1', enable_compression: r.data.enable_compression || '1', links_title: r.data.links_title || '友链', site_created_at: r.data.site_created_at || '2020-02-02', site_password: '', sitePasswordType: sitePasswordSet.value ? 'has' : '', allowed_origins: r.data.allowed_origins || '*', enable_tag_cloud: r.data.enable_tag_cloud || '1', enable_post_toc: r.data.enable_post_toc || '1', enable_mcp: r.data.enable_mcp || '0', profile_position: r.data.profile_position || 'left', tag_cloud_position: r.data.tag_cloud_position || 'left', pinned_post_id: pinnedId, pinnedType: pinnedId ? 'has' : '', copyright_notice: r.data.copyright_notice || '', ad_content: r.data.ad_content || '', ad_position: r.data.ad_position || 'left' }; currentPinnedId.value = pinnedId; applyTheme(); loadEmojiOnInit(); } catch (e) { showToast('加载设置失败'); } };
         const loadTrash = async () => { try { const r = await api('/api/admin/trash'); trashPosts.value = r.data; } catch (e) { showToast('加载回收站失败'); } };
@@ -833,9 +834,10 @@ export function getAdminHTML() {
         });
         const postPage = ref(1);
         const postPageSize = 10;
+        const postTotal = ref(0);
         const openAdd = () => { editingId.value = 'new'; form.value = { title: '', content: '', category: '', tags: '', status: 'published', cover_image: '', password: '', passwordType: '', hadPassword: false, published_at: new Date().toISOString().split('T')[0] }; coverPreview.value = ''; };
         const cancelNewPost = async () => { const { confirmed } = await showConfirm('确认取消', '未保存的内容将丢失'); if (confirmed) { editingId.value = null; } };
-        const toggleEdit = (p) => { if (editingId.value === p.id) { editingId.value = null; } else { editingId.value = p.id; form.value = { title: p.title, content: p.content, category: p.category, tags: p.tags, status: p.status, cover_image: p.cover_image || '', password: '', passwordType: p.has_password ? 'has' : '', hadPassword: !!p.has_password, published_at: p.published_at ? p.published_at.split('T')[0] : new Date().toISOString().split('T')[0] }; coverPreview.value = p.cover_image || ''; } };
+        const toggleEdit = async (p) => { if (editingId.value === p.id) { editingId.value = null; return; } try { const r = await api('/api/admin/post?id=' + p.id); const post = r.data; editingId.value = p.id; form.value = { title: post.title, content: post.content, category: post.category, tags: post.tags, status: post.status, cover_image: post.cover_image || '', password: '', passwordType: post.has_password ? 'has' : '', hadPassword: !!post.has_password, published_at: post.published_at ? post.published_at.split('T')[0] : new Date().toISOString().split('T')[0] }; coverPreview.value = post.cover_image || ''; } catch (e) { showToast('加载文章失败'); } };
         const savePost = async () => { if (form.value.passwordType === 'has' && !form.value.password && !form.value.hadPassword) { alert('请输入文章密码'); return; } const { confirmed } = await showConfirm('确认保存', '确定保存？'); if (!confirmed) return; try { const postData = { ...form.value }; if (postData.passwordType !== 'has') { postData.password = ''; } else if (!postData.password) { delete postData.password; } delete postData.passwordType; delete postData.hadPassword; if (editingId.value === 'new') { await api('/api/admin/post', { method: 'POST', data: postData }); } else { await api('/api/admin/post?id=' + editingId.value, { method: 'PUT', data: postData }); } editingId.value = null; loadPosts(); showToast('保存成功'); } catch (e) { alert('保存失败'); } };
         const deletePost = async (id) => { const { confirmed } = await showConfirm('确认删除', '移到回收站？'); if (!confirmed) return; try { await api('/api/admin/post?id=' + id, { method: 'DELETE' }); loadPosts(); loadTrash(); showToast('已移到回收站'); } catch (e) { showToast('删除失败'); } };
         const editCategory = (c) => { editingCategory.value = c.id; categoryForm.value = { name: c.name, slug: c.slug, description: c.description || '' }; };
@@ -1358,9 +1360,9 @@ export function getAdminHTML() {
           }
         };
 
-        watch(currentPage, (v) => { localStorage.setItem('adminPage', v); if (v === 'images' && !imagesLoaded.value) loadImages(); });
+        watch(currentPage, (v) => { localStorage.setItem('adminPage', v); if (v === 'images' && !imagesLoaded.value) loadImages(); if (v === 'trash') loadTrash(); if (v === 'settings') loadAgentKeys(); });
         onMounted(() => { check(); document.addEventListener('click', closeAllSelects); });
-        return { logged, username, password, login, logout, posts, editingId, form, coverPreview, toast, openAdd, cancelNewPost, toggleEdit, handleCoverChange, handleCoverDrop, handleDrop, deleteCover, savePost, deletePost, categories, currentPage, postPage, postPageSize, categoryForm, saveCategory, deleteCategory, editCategory, editingCategory, settingsForm, saveSiteSettings, savePersonalSettings, sitePasswordSet, trashPosts, restorePost, permanentDelete, confirmModal, showConfirm, insertMd, applyTheme, applyCopyrightTemplate, applyFooterTemplate, customSelects, toggleSelect, selectOption, getSelectLabel, showImportModal, importFileName, importFileData, importing, importResult, handleImportFile, importPosts, currentPinnedId, setPinnedPost, iconList, emojiLoading, insertEmoji, images, r2Configured, imagesLoaded, imagesLoadError, imagesCursor, imagesHasMore, showImagePicker, selectedImage, pickUploading, locationOrigin, imageSizes, captureImageSize, loadImages, loadMoreImages, handleImageUpload, openImagePicker, insertPickedImage, copyImageLink, deleteImage, agentKeys, agentKeyForm, mcpAddress, loadAgentKeys, maskKey, copyText, generateAgentKey, resetAgentKey, revokeAgentKey };
+        return { logged, username, password, login, logout, posts, categoryCounts, editingId, form, coverPreview, toast, openAdd, cancelNewPost, toggleEdit, handleCoverChange, handleCoverDrop, handleDrop, deleteCover, savePost, deletePost, categories, currentPage, postPage, postPageSize, postTotal, loadPosts, categoryForm, saveCategory, deleteCategory, editCategory, editingCategory, settingsForm, saveSiteSettings, savePersonalSettings, sitePasswordSet, trashPosts, restorePost, permanentDelete, confirmModal, showConfirm, insertMd, applyTheme, applyCopyrightTemplate, applyFooterTemplate, customSelects, toggleSelect, selectOption, getSelectLabel, showImportModal, importFileName, importFileData, importing, importResult, handleImportFile, importPosts, currentPinnedId, setPinnedPost, iconList, emojiLoading, insertEmoji, images, r2Configured, imagesLoaded, imagesLoadError, imagesCursor, imagesHasMore, showImagePicker, selectedImage, pickUploading, locationOrigin, imageSizes, captureImageSize, loadImages, loadMoreImages, handleImageUpload, openImagePicker, insertPickedImage, copyImageLink, deleteImage, agentKeys, agentKeyForm, mcpAddress, loadAgentKeys, maskKey, copyText, generateAgentKey, resetAgentKey, revokeAgentKey };
       }
     }).mount('#app');
     });

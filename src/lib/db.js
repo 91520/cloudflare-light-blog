@@ -229,6 +229,8 @@ export async function initDB(env) {
 // ==================== Settings 内存缓存 ====================
 let settingsCache = null;
 let settingsCacheTime = 0;
+let settingsPromise = null;
+let settingsVersion = 0;
 const SETTINGS_CACHE_TTL = 300 * 1000; // 缓存 5 分钟（保存后主动失效）
 
 /**
@@ -239,6 +241,14 @@ export async function getSettings(env) {
   if (settingsCache && Date.now() - settingsCacheTime < SETTINGS_CACHE_TTL) {
     return settingsCache;
   }
+  if (settingsPromise) return settingsPromise;
+  const version = settingsVersion;
+  const promise = loadSettings(env, version);
+  settingsPromise = promise;
+  try { return await promise; } finally { if (settingsPromise === promise) settingsPromise = null; }
+}
+
+async function loadSettings(env, version) {
   const defaults = {
     site_name: '我的博客',
     site_description: '',
@@ -279,9 +289,11 @@ export async function getSettings(env) {
     console.error('[DB] 获取设置失败:', e);
   }
 
-  // 更新缓存
-  settingsCache = defaults;
-  settingsCacheTime = Date.now();
+  // 写入期间若缓存已失效，旧查询不得覆盖新设置。
+  if (settingsVersion === version) {
+    settingsCache = defaults;
+    settingsCacheTime = Date.now();
+  }
   return defaults;
 }
 
@@ -291,6 +303,9 @@ export async function getSettings(env) {
 function invalidateSettingsCache() {
   settingsCache = null;
   settingsCacheTime = 0;
+  settingsVersion++;
+  // 若写入期间存在旧的读取请求，完成后不能覆盖最新设置。
+  settingsPromise = null;
 }
 
 /**

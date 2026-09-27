@@ -252,7 +252,10 @@ export async function handleAPI(request, env, path) {
       return handleUploadAPI(request, env);
     }
     if (path === '/api/admin/posts' && method === 'GET') {
-      return handleAdminGetPosts(env);
+      return handleAdminGetPosts(request, env);
+    }
+    if (path === '/api/admin/post' && method === 'GET') {
+      return handleAdminGetPost(request, env);
     }
     if (path === '/api/admin/settings' && method === 'GET') {
       return handleAdminGetSettings(env);
@@ -420,9 +423,7 @@ async function handleGetSettings(env) {
  */
 async function handleAdminGetSettings(env) {
   const settings = await getSettings(env);
-  settings.site_password_set = settings.site_password ? '1' : '0';
-  settings.site_password = '';
-  return json(settings);
+  return json({ ...settings, site_password_set: settings.site_password ? '1' : '0', site_password: '' });
 }
 
 /**
@@ -649,17 +650,27 @@ ${items}
 
 // ==================== 管理 API 实现 ====================
 
-async function handleAdminGetPosts(env) {
-  const { results } = await env.DB.prepare(
-    "SELECT * FROM posts WHERE status != 'trash' ORDER BY created_at DESC"
+async function handleAdminGetPosts(request, env) {
+  const page = Math.max(1, parseInt(new URL(request.url).searchParams.get('page'), 10) || 1);
+  const limit = 10;
+  const { results: counts } = await env.DB.prepare(
+    "SELECT category, COUNT(*) AS total FROM posts WHERE status != 'trash' GROUP BY category"
   ).all();
-  // 密码哈希不回传前端，仅告知是否已设置（避免回填后二次哈希）
-  const data = (results || []).map(p => {
-    const { password, ...rest } = p;
-    rest.has_password = password ? 1 : 0;
-    return rest;
-  });
-  return json(data);
+  const categoryCounts = Object.fromEntries((counts || []).map(row => [row.category, row.total]));
+  const total = (counts || []).reduce((sum, row) => sum + row.total, 0);
+  const { results } = await env.DB.prepare(
+    "SELECT id, title, category, tags, status, created_at, updated_at, published_at FROM posts WHERE status != 'trash' ORDER BY created_at DESC LIMIT ? OFFSET ?"
+  ).bind(limit, (page - 1) * limit).all();
+  return json({ data: results || [], total, categoryCounts });
+}
+
+async function handleAdminGetPost(request, env) {
+  const id = Number(new URL(request.url).searchParams.get('id'));
+  if (!Number.isSafeInteger(id) || id < 1) return errorResponse('无效的文章 ID', 400);
+  const post = await env.DB.prepare("SELECT * FROM posts WHERE id=? AND status != 'trash'").bind(id).first();
+  if (!post) return errorResponse('文章不存在', 404);
+  const { password, ...data } = post;
+  return json({ ...data, has_password: password ? 1 : 0 });
 }
 
 async function handleCreatePost(request, env) {
@@ -1107,8 +1118,8 @@ async function handleImportWordPress(request, env) {
 /**
  * 获取标签列表（服务端聚合，避免前端请求全部文章）
  */
-async function getTagsData(env) {
-  const { results } = await env.DB.prepare(
+async function getTagsData(env, rows) {
+  const { results } = rows ? { results: rows } : await env.DB.prepare(
     "SELECT tags FROM posts WHERE status IN ('published','publish') AND (password IS NULL OR password='') AND tags IS NOT NULL AND tags != ''"
   ).all();
 
@@ -1143,11 +1154,15 @@ async function handleGetTags(env) {
  * 侧边栏聚合接口：一次返回统计 + 分类 + 友链 + 标签
  */
 async function handleGetPageMeta(env) {
-  const [stats, categories, links, tags] = await Promise.all([
-    getStatsData(env),
+  const [postCount, categories, links, tagRows] = await Promise.all([
+    env.DB.prepare("SELECT COUNT(*) as cnt FROM posts WHERE status IN ('published','publish')").first(),
     getCategoriesData(env),
     getLinksData(env),
-    getTagsData(env)
+    env.DB.prepare("SELECT tags, password FROM posts WHERE status IN ('published','publish') AND tags IS NOT NULL AND tags != ''").all()
   ]);
-  return json({ stats, categories, links, tags });
+  const rows = tagRows.results || [];
+  const allTags = new Set();
+  rows.forEach(r => r.tags.split(',').forEach(t => { if (t.trim()) allTags.add(t.trim()); }));
+  const tags = await getTagsData(env, rows.filter(r => !r.password));
+  return json({ stats: { postCount: postCount?.cnt ?? 0, catCount: categories.length, tagCount: allTags.size }, categories, links, tags });
 }
