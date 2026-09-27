@@ -2,6 +2,9 @@
 
 import { hashPassword } from './auth.js';
 
+// 升级数据库结构时递增此值，确保旧实例执行一次迁移。
+const SCHEMA_VERSION = '1';
+
 /**
  * 获取表的列信息（白名单验证防止 SQL 注入）
  */
@@ -39,6 +42,9 @@ export async function initDB(env) {
 
   try {
     const DB = env.DB;
+    // 已完成此版本迁移时，跳过建表/索引检查及默认数据的逐条写入。
+    const schema = await DB.prepare("SELECT value FROM settings WHERE key='__schema_version'").first().catch(() => null);
+    if (schema?.value === SCHEMA_VERSION) return true;
 
     // ========== 1. 创建 categories 表 ==========
     if (!(await tableExists(DB, 'categories'))) {
@@ -212,6 +218,7 @@ export async function initDB(env) {
       console.log('[DB] 已添加默认分类');
     }
 
+    await DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('__schema_version', ?)").bind(SCHEMA_VERSION).run();
     return true;
   } catch (e) {
     console.error('[DB] 初始化错误:', e.message || 'Error');
@@ -264,7 +271,7 @@ export async function getSettings(env) {
     if (results) {
       // 过滤速率限制等内部记录，避免污染设置数据
       results.forEach(s => {
-        if (s.key.includes('_rate_')) return;
+        if (s.key.includes('_rate_') || s.key === '__schema_version') return;
         defaults[s.key] = s.value || '';
       });
     }
