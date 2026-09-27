@@ -2,6 +2,7 @@
 
 import { escapeHtml, renderAdContent } from '../lib/utils.js';
 import { getTheme } from '../themes/index.js';
+import { simpleBaseCSS, simpleHomeCSS } from '../themes/simple-layout.js';
 
 export function getFrontendHTML(settings, requestUrl) {
   settings = settings || {};
@@ -9,7 +10,7 @@ export function getFrontendHTML(settings, requestUrl) {
   const siteDesc = settings.site_description || '';
   const siteAuthor = settings.site_author || siteName;
   const siteBio = settings.site_bio || '';
-  const currentTheme = getTheme(settings.site_theme);
+  const currentTheme = getTheme(settings.site_theme, settings);
   // 表情包资源：.js 为 Symbol（多色 SVG）模式，.css 为 Font class（单色字体）模式
   const iconfontUrl = settings.iconfont_css ? (settings.iconfont_css.startsWith('//') ? 'https:' + settings.iconfont_css : settings.iconfont_css) : '';
   const iconfontTag = iconfontUrl ? (iconfontUrl.split('?')[0].endsWith('.js') ? `<script src="${iconfontUrl}"></script>` : `<link href="${iconfontUrl}" rel="stylesheet">`) : '';
@@ -141,12 +142,14 @@ export function getFrontendHTML(settings, requestUrl) {
       box-shadow: 0 4px 12px rgba(0,0,0,0.15);
       filter: brightness(0.95);
     }
+    ${currentTheme.layout === 'simple' ? simpleBaseCSS + simpleHomeCSS : ''}
   </style>
 </head>
 <body>
   ${hasSidebar ? `<button class="mobile-nav-toggle" onclick="toggleNav()" aria-label="打开菜单">☰</button>
   <div class="mobile-overlay" id="mobileOverlay" onclick="toggleNav()"></div>` : ''}
   <header>
+    ${currentTheme.layout === 'simple' ? `<div class="simple-header"><nav class="simple-nav"><a href="/">首页</a><a href="/#search-input">文章</a></nav><img class="simple-avatar" src="/icon/profile.png" alt="${escapeHtml(siteAuthor)}"><div class="simple-author">${escapeHtml(siteAuthor)}</div>${siteBio ? `<p class="simple-bio">${escapeHtml(siteBio)}</p>` : ''}</div>` : ''}
     <h1><a href="/">${escapeHtml(siteName)}</a></h1>
     ${siteDesc ? `<p>${escapeHtml(siteDesc)}</p>` : ''}
   </header>

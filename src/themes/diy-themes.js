@@ -1,5 +1,4 @@
-// 自定义主题 - 用户可自由修改此文件定制专属风格
-// 使用说明：修改下方颜色值即可实时预览效果
+// 自定义主题默认值；实际配置在后台「个性设置」编辑，保存至 D1 settings。
 export default {
   name: '自定义',
   fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif",

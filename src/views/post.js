@@ -2,6 +2,7 @@
 
 import { escapeHtml, renderAdContent } from '../lib/utils.js';
 import { getTheme } from '../themes/index.js';
+import { simpleBaseCSS, simplePostCSS } from '../themes/simple-layout.js';
 
 export function getPostHTML(post, settings, requestUrl) {
   settings = settings || {};
@@ -9,7 +10,7 @@ export function getPostHTML(post, settings, requestUrl) {
   const siteDesc = settings.site_description || '';
   const siteAuthor = settings.site_author || siteName;
   const postExcerpt = post.excerpt || (post.content ? post.content.substring(0, 160).split('#').join('').split('*').join('').split('\n').join(' ').trim() : '');
-  const currentTheme = getTheme(settings.site_theme);
+  const currentTheme = getTheme(settings.site_theme, settings);
   // 表情包资源：.js 为 Symbol（多色 SVG）模式，.css 为 Font class（单色字体）模式
   const iconfontUrl = settings.iconfont_css ? (settings.iconfont_css.startsWith('//') ? 'https:' + settings.iconfont_css : settings.iconfont_css) : '';
   const iconfontTag = iconfontUrl ? (iconfontUrl.split('?')[0].endsWith('.js') ? `<script src="${iconfontUrl}"></script>` : `<link href="${iconfontUrl}" rel="stylesheet">`) : '';
@@ -176,6 +177,7 @@ export function getPostHTML(post, settings, requestUrl) {
       .post-article h1 { font-size: 1.3em; }
       footer { padding: 20px 16px; font-size: 0.8em; }
     }
+    ${currentTheme.layout === 'simple' ? simpleBaseCSS + simplePostCSS : ''}
   </style>
   <link rel="stylesheet" href="https://cdnjs.loli.net/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
 </head>
@@ -183,6 +185,7 @@ export function getPostHTML(post, settings, requestUrl) {
   ${hasSidebar ? `<button class="mobile-nav-toggle" onclick="toggleNav()" aria-label="打开菜单">☰</button>
   <div class="mobile-overlay" id="mobileOverlay" onclick="toggleNav()"></div>` : ''}
   <header>
+    ${currentTheme.layout === 'simple' ? `<div class="simple-header"><nav class="simple-nav"><a href="/">首页</a><a href="/#search-input">文章</a></nav><img class="simple-avatar" src="/icon/profile.png" alt="${escapeHtml(siteAuthor)}"><div class="simple-author">${escapeHtml(siteAuthor)}</div>${settings.site_bio ? `<p class="simple-bio">${escapeHtml(settings.site_bio)}</p>` : ''}</div>` : ''}
     <h1><a href="/">${escapeHtml(siteName)}</a></h1>
     ${siteDesc ? `<p>${escapeHtml(siteDesc)}</p>` : ''}
   </header>

@@ -1,8 +1,12 @@
 // ==================== 后台管理页面 ====================
 
 import { escapeHtml } from '../lib/utils.js';
+import { themes, DIY_FIELDS } from '../themes/index.js';
 
 export function getAdminHTML() {
+  // 序列化统一主题注册中心，避免后台预览与前台颜色配置各维护一份。
+  const themeConfig = JSON.stringify(themes).replace(/</g, '\\u003c');
+  const diyFields = JSON.stringify(DIY_FIELDS);
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -648,9 +652,7 @@ export function getAdminHTML() {
             <div class="card">
               <h3 style="color:#794f27;margin-bottom:16px">布局与模块</h3>
               <div class="form-h form-h-center"><label>主题风格</label><div class="form-body"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-                <label class="radio-item" style="margin:0"><input type="radio" value="animal-forest" v-model="settingsForm.site_theme" @change="applyTheme()"><span class="radio-custom"></span><span class="radio-label">🌲 动森</span></label>
-                <label class="radio-item" style="margin:0"><input type="radio" value="ocean-breeze" v-model="settingsForm.site_theme" @change="applyTheme()"><span class="radio-custom"></span><span class="radio-label">🌊 蔚蓝</span></label>
-                <label class="radio-item" style="margin:0"><input type="radio" value="diy-themes" v-model="settingsForm.site_theme" @change="applyTheme()"><span class="radio-custom"></span><span class="radio-label">🎨 自定义</span></label>
+                <label v-for="theme in themeOptions" :key="theme.value" class="radio-item" style="margin:0"><input type="radio" :value="theme.value" v-model="settingsForm.site_theme" @change="applyTheme()"><span class="radio-custom"></span><span class="radio-label">{{theme.name}}</span></label>
               </div></div></div>
               <div class="form-h form-h-center"><label>个人简介位置</label><div class="form-body"><div style="display:flex;align-items:center;gap:12px">
                 <label class="radio-item" style="margin:0"><input type="radio" value="left" v-model="settingsForm.profile_position"><span class="radio-custom"></span><span class="radio-label">居左</span></label>
@@ -686,6 +688,13 @@ export function getAdminHTML() {
                 <label class="radio-item" style="margin:0"><input type="radio" value="right" v-model="settingsForm.ad_position"><span class="radio-custom"></span><span class="radio-label">右侧栏</span></label>
               </div></div></div>
               <div class="form-h"><label>广告内容</label><div class="form-body"><textarea v-model="settingsForm.ad_content" rows="4" placeholder="HTML 示例：&#10;<a href='https://example.com'><img src='广告图片链接'></a>&#10;Markdown 示例：&#10;[![广告](广告图片链接)](https://example.com)"></textarea><p style="font-size:12px;color:#9f927d;margin-top:6px">广告图片使用1:1比例</p></div></div>
+            </div>
+          </div>
+          <div class="card" v-if="settingsForm.site_theme === 'diy-themes'" style="margin-top:4px">
+            <h3 style="color:#794f27;margin-bottom:8px">自定义主题</h3>
+            <p style="font-size:13px;color:#777;margin-bottom:18px">编辑后点击上方“保存设置”才会同步到前台。</p>
+            <div class="personal-grid">
+              <div v-for="field in diyFields" :key="field.key" class="form-h"><label :for="'diy-' + field.key">{{field.label}}</label><div class="form-body"><input :id="'diy-' + field.key" v-model.trim="diyTheme[field.key]" :placeholder="field.placeholder" @input="applyTheme()"></div></div>
             </div>
           </div>
         </div>
@@ -817,7 +826,7 @@ export function getAdminHTML() {
         const logout = () => { localStorage.removeItem('token'); logged.value = false; };
         const loadPosts = async (page = postPage.value) => { try { const r = await api('/api/admin/posts?page=' + page); posts.value = r.data.data; postTotal.value = r.data.total; categoryCounts.value = r.data.categoryCounts || {}; postPage.value = page; if (page > 1 && !posts.value.length && postTotal.value) await loadPosts(page - 1); } catch (e) { showToast('加载文章失败'); } };
         const loadCategories = async () => { try { const r = await api('/api/categories'); categories.value = r.data; } catch (e) { showToast('加载分类失败'); } };
-        const loadSettings = async () => { try { const r = await api('/api/admin/settings'); const pinnedId = r.data.pinned_post_id || ''; sitePasswordSet.value = r.data.site_password_set === '1'; settingsForm.value = { site_name: r.data.site_name || '', site_description: r.data.site_description || '', site_bio: r.data.site_bio || '', site_links: r.data.site_links || '', site_author: r.data.site_author || '', site_footer: r.data.site_footer || '', custom_js: r.data.custom_js || '', iconfont_css: r.data.iconfont_css || '', site_theme: r.data.site_theme || 'animal-forest', allow_robots: r.data.allow_robots || '1', enable_compression: r.data.enable_compression || '1', links_title: r.data.links_title || '友链', site_created_at: r.data.site_created_at || '2020-02-02', site_password: '', sitePasswordType: sitePasswordSet.value ? 'has' : '', allowed_origins: r.data.allowed_origins || '*', enable_tag_cloud: r.data.enable_tag_cloud || '1', enable_post_toc: r.data.enable_post_toc || '1', enable_mcp: r.data.enable_mcp || '0', profile_position: r.data.profile_position || 'left', tag_cloud_position: r.data.tag_cloud_position || 'left', pinned_post_id: pinnedId, pinnedType: pinnedId ? 'has' : '', copyright_notice: r.data.copyright_notice || '', ad_content: r.data.ad_content || '', ad_position: r.data.ad_position || 'left' }; currentPinnedId.value = pinnedId; applyTheme(); loadEmojiOnInit(); } catch (e) { showToast('加载设置失败'); } };
+        const loadSettings = async () => { try { const r = await api('/api/admin/settings'); const pinnedId = r.data.pinned_post_id || ''; try { const saved = JSON.parse(r.data.diy_theme || '{}'); diyTheme.value = Object.fromEntries(diyFields.map(({ key }) => [key, typeof saved[key] === 'string' ? saved[key] : themes['diy-themes'][key]])); } catch { diyTheme.value = Object.fromEntries(diyFields.map(({ key }) => [key, themes['diy-themes'][key]])); } sitePasswordSet.value = r.data.site_password_set === '1'; settingsForm.value = { site_name: r.data.site_name || '', site_description: r.data.site_description || '', site_bio: r.data.site_bio || '', site_links: r.data.site_links || '', site_author: r.data.site_author || '', site_footer: r.data.site_footer || '', custom_js: r.data.custom_js || '', iconfont_css: r.data.iconfont_css || '', site_theme: r.data.site_theme || 'animal-forest', allow_robots: r.data.allow_robots || '1', enable_compression: r.data.enable_compression || '1', links_title: r.data.links_title || '友链', site_created_at: r.data.site_created_at || '2020-02-02', site_password: '', sitePasswordType: sitePasswordSet.value ? 'has' : '', allowed_origins: r.data.allowed_origins || '*', enable_tag_cloud: r.data.enable_tag_cloud || '1', enable_post_toc: r.data.enable_post_toc || '1', enable_mcp: r.data.enable_mcp || '0', profile_position: r.data.profile_position || 'left', tag_cloud_position: r.data.tag_cloud_position || 'left', pinned_post_id: pinnedId, pinnedType: pinnedId ? 'has' : '', copyright_notice: r.data.copyright_notice || '', ad_content: r.data.ad_content || '', ad_position: r.data.ad_position || 'left' }; currentPinnedId.value = pinnedId; applyTheme(); loadEmojiOnInit(); } catch (e) { showToast('加载设置失败'); } };
         const loadTrash = async () => { try { const r = await api('/api/admin/trash'); trashPosts.value = r.data; } catch (e) { showToast('加载回收站失败'); } };
         const showToast = (m) => { toast.value = m; setTimeout(() => toast.value = '', 2000); };
         const showConfirm = (t, m, options = {}) => new Promise(r => {
@@ -861,6 +870,9 @@ export function getAdminHTML() {
             'site_author', 'site_bio', 'site_created_at', 'links_title', 'site_links'
           ]);
           data.pinned_post_id = settingsForm.value.pinnedType === 'has' ? settingsForm.value.pinned_post_id : '';
+          if (settingsForm.value.site_theme === 'diy-themes') {
+            data.diy_theme = JSON.stringify(Object.fromEntries(diyFields.map(({ key }) => [key, diyTheme.value[key]])));
+          }
           await postSettings(data, () => { currentPinnedId.value = data.pinned_post_id; });
         };
         const handleCoverChange = async (e) => { const f = e.target.files[0]; if (f) await uploadFile(f); };
@@ -1212,63 +1224,14 @@ export function getAdminHTML() {
           }
         };
 
-        // 主题配置
-        const themes = {
-          'animal-forest': {
-            name: '动森',
-            headerBg: 'linear-gradient(180deg, #8ac68a 0%, #6fba2c 100%)',
-            sidebarBg: '#8ac68a',
-            btnBg: '#19c8b9',
-            btnShadow: '#11a89b',
-            dangerBg: '#e05a5a',
-            dangerShadow: '#c94444',
-            cardBg: '#f7f3df',
-            cardBorder: '#e8e0cc',
-            bodyBg: '#f8f8f0',
-            textPrimary: '#794f27',
-            textBody: '#725d42',
-            textSecondary: '#9f927d',
-            inputBorder: '#c4b89e',
-            inputShadow: '#d4c9b4'
-          },
-          'ocean-breeze': {
-            name: '蔚蓝',
-            headerBg: 'linear-gradient(180deg, #4ECDC4 0%, #2C9C93 100%)',
-            sidebarBg: '#4ECDC4',
-            btnBg: '#4ECDC4',
-            btnShadow: '#2C9C93',
-            dangerBg: '#E74C3C',
-            dangerShadow: '#C0392B',
-            cardBg: '#F0F9F8',
-            cardBorder: '#B8E6E1',
-            bodyBg: '#F5FCFB',
-            textPrimary: '#1A535C',
-            textBody: '#2C3E50',
-            textSecondary: '#7F8C8D',
-            inputBorder: '#B8E6E1',
-            inputShadow: '#A0D8D2'
-          },
-          'diy-themes': {
-            name: '自定义',
-            headerBg: 'linear-gradient(180deg, #667eea 0%, #764ba2 100%)',
-            sidebarBg: '#667eea',
-            btnBg: '#667eea',
-            btnShadow: '#5a6fd6',
-            dangerBg: '#e05a5a',
-            dangerShadow: '#c94444',
-            cardBg: '#ffffff',
-            cardBorder: '#e2e8f0',
-            bodyBg: '#f7fafc',
-            textPrimary: '#2d3748',
-            textBody: '#4a5568',
-            textSecondary: '#a0aec0',
-            inputBorder: '#e2e8f0',
-            inputShadow: '#edf2f7'
-          }
-        };
-
+        // 与前台共用主题注册表；新增主题只需在 src/themes/ 注册。
+        const themes = ${themeConfig};
+        const themeOptions = Object.entries(themes).map(([value, theme]) => ({ value, name: theme.name }));
+        const diyFields = ${diyFields}.map(key => ({ key, label: ({ fontFamily: '字体族', fontUrl: '字体 CSS 地址', headerBg: '页头背景' })[key] || key, placeholder: themes['diy-themes'][key] }));
+        const diyTheme = ref(Object.fromEntries(diyFields.map(({ key }) => [key, themes['diy-themes'][key]])));
         const applyTheme = () => {
-          const theme = themes[settingsForm.value.site_theme] || themes['animal-forest'];
+          const base = themes[settingsForm.value.site_theme] || themes['animal-forest'];
+          const theme = settingsForm.value.site_theme === 'diy-themes' ? { ...base, ...diyTheme.value } : base;
           const root = document.documentElement;
           root.style.setProperty('--header-bg', theme.headerBg);
           root.style.setProperty('--sidebar-bg', theme.sidebarBg);
@@ -1362,7 +1325,7 @@ export function getAdminHTML() {
 
         watch(currentPage, (v) => { localStorage.setItem('adminPage', v); if (v === 'images' && !imagesLoaded.value) loadImages(); if (v === 'trash') loadTrash(); if (v === 'settings') loadAgentKeys(); });
         onMounted(() => { check(); document.addEventListener('click', closeAllSelects); });
-        return { logged, username, password, login, logout, posts, categoryCounts, editingId, form, coverPreview, toast, openAdd, cancelNewPost, toggleEdit, handleCoverChange, handleCoverDrop, handleDrop, deleteCover, savePost, deletePost, categories, currentPage, postPage, postPageSize, postTotal, loadPosts, categoryForm, saveCategory, deleteCategory, editCategory, editingCategory, settingsForm, saveSiteSettings, savePersonalSettings, sitePasswordSet, trashPosts, restorePost, permanentDelete, confirmModal, showConfirm, insertMd, applyTheme, applyCopyrightTemplate, applyFooterTemplate, customSelects, toggleSelect, selectOption, getSelectLabel, showImportModal, importFileName, importFileData, importing, importResult, handleImportFile, importPosts, currentPinnedId, setPinnedPost, iconList, emojiLoading, insertEmoji, images, r2Configured, imagesLoaded, imagesLoadError, imagesCursor, imagesHasMore, showImagePicker, selectedImage, pickUploading, locationOrigin, imageSizes, captureImageSize, loadImages, loadMoreImages, handleImageUpload, openImagePicker, insertPickedImage, copyImageLink, deleteImage, agentKeys, agentKeyForm, mcpAddress, loadAgentKeys, maskKey, copyText, generateAgentKey, resetAgentKey, revokeAgentKey };
+        return { logged, username, password, login, logout, posts, categoryCounts, editingId, form, coverPreview, toast, openAdd, cancelNewPost, toggleEdit, handleCoverChange, handleCoverDrop, handleDrop, deleteCover, savePost, deletePost, categories, currentPage, postPage, postPageSize, postTotal, loadPosts, categoryForm, saveCategory, deleteCategory, editCategory, editingCategory, settingsForm, saveSiteSettings, savePersonalSettings, themeOptions, diyFields, diyTheme, sitePasswordSet, trashPosts, restorePost, permanentDelete, confirmModal, showConfirm, insertMd, applyTheme, applyCopyrightTemplate, applyFooterTemplate, customSelects, toggleSelect, selectOption, getSelectLabel, showImportModal, importFileName, importFileData, importing, importResult, handleImportFile, importPosts, currentPinnedId, setPinnedPost, iconList, emojiLoading, insertEmoji, images, r2Configured, imagesLoaded, imagesLoadError, imagesCursor, imagesHasMore, showImagePicker, selectedImage, pickUploading, locationOrigin, imageSizes, captureImageSize, loadImages, loadMoreImages, handleImageUpload, openImagePicker, insertPickedImage, copyImageLink, deleteImage, agentKeys, agentKeyForm, mcpAddress, loadAgentKeys, maskKey, copyText, generateAgentKey, resetAgentKey, revokeAgentKey };
       }
     }).mount('#app');
     });

@@ -261,6 +261,7 @@ async function loadSettings(env, version) {
     site_links: '',
     links_title: '友链',
     site_theme: 'animal-forest',
+    diy_theme: '',
     enable_tag_cloud: '1',
     enable_post_toc: '1',
     enable_mcp: '0',

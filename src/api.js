@@ -3,6 +3,7 @@
 import { json, errorResponse, generateSlug, generateExcerpt, deriveHMACKey, escapeHtml } from './lib/utils.js';
 import { generateToken, authenticateRequest, hashPassword, verifyPasswordHash } from './lib/auth.js';
 import { getSettings, saveSettings } from './lib/db.js';
+import { themes, validateDiyTheme } from './themes/index.js';
 import { handleUpload, listImages } from './lib/image.js';
 import { generateAgentKey } from './lib/agent-auth.js';
 import { purgeCache, withCache } from './lib/cache.js';
@@ -819,7 +820,7 @@ async function handleDeleteCategory(request, env) {
 const SETTINGS_WHITELIST = [
   'site_name', 'site_description', 'site_bio', 'site_author', 'site_created_at',
   'site_footer', 'custom_js', 'iconfont_css', 'site_links', 'links_title',
-  'site_theme', 'enable_tag_cloud', 'enable_post_toc', 'enable_mcp', 'profile_position', 'tag_cloud_position',
+  'site_theme', 'diy_theme', 'enable_tag_cloud', 'enable_post_toc', 'enable_mcp', 'profile_position', 'tag_cloud_position',
   'pinned_post_id', 'copyright_notice', 'ad_content', 'ad_position',
   'allow_robots', 'enable_compression', 'allowed_origins', 'site_password'
 ];
@@ -831,6 +832,13 @@ async function handleSaveSettings(request, env) {
     const filtered = {};
     for (const key of SETTINGS_WHITELIST) {
       if (body[key] !== undefined) filtered[key] = body[key];
+    }
+    if (filtered.site_theme !== undefined && !Object.hasOwn(themes, filtered.site_theme)) return errorResponse('无效的主题', 400);
+    if (filtered.diy_theme !== undefined) {
+      let diy;
+      try { diy = JSON.parse(filtered.diy_theme); } catch { return errorResponse('自定义主题格式错误', 400); }
+      if (!validateDiyTheme(diy)) return errorResponse('自定义主题参数不合法', 400);
+      filtered.diy_theme = JSON.stringify(diy);
     }
     await saveSettings(env, filtered);
     // 清除前台相关缓存
