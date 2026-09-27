@@ -177,7 +177,7 @@ export function getPostHTML(post, settings, requestUrl) {
       footer { padding: 20px 16px; font-size: 0.8em; }
     }
   </style>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+  <link rel="stylesheet" href="https://cdnjs.loli.net/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
 </head>
 <body>
   ${hasSidebar ? `<button class="mobile-nav-toggle" onclick="toggleNav()" aria-label="打开菜单">☰</button>
@@ -525,9 +525,9 @@ export function getPostHTML(post, settings, requestUrl) {
       }
 
       // 按需加载：marked 必需；仅当存在代码块时才加载 highlight
-      try { await loadScript('https://cdnjs.cloudflare.com/ajax/libs/marked/18.0.11/lib/marked.umd.min.js'); } catch (e) {}
+      try { await loadScript('https://cdnjs.loli.net/ajax/libs/marked/15.0.12/marked.min.js'); } catch (e) {}
       if (codeBlocks.length > 0) {
-        try { await loadScript('https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js'); } catch (e) {}
+        try { await loadScript('https://cdnjs.loli.net/ajax/libs/highlight.js/11.9.0/highlight.min.js'); } catch (e) {}
       }
 
       // 第二步：用 marked 解析（代码块已被占位符替换，不会有 HTML 问题）
