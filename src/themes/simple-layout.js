@@ -10,8 +10,6 @@ export const simpleBaseCSS = `
   .simple-nav a { color:#555; }
   .simple-nav a:hover { color:#dd3333; }
   .simple-avatar { width:76px; height:76px; object-fit:cover; border-radius:50%; margin-bottom:8px; }
-  .simple-author { font-weight:700; color:#276077; margin-bottom:4px; }
-  .simple-bio { max-width:640px; margin:0 auto; line-height:1.65; }
   main { max-width:1180px; gap:36px; margin-top:32px; }
   .profile-card { border:0; border-radius:0; box-shadow:none; padding:12px 0 22px; border-bottom:1px solid #eee; }
   .profile-card .avatar { width:100px; height:100px; border:0; }

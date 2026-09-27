@@ -185,7 +185,7 @@ export function getPostHTML(post, settings, requestUrl) {
   ${hasSidebar ? `<button class="mobile-nav-toggle" onclick="toggleNav()" aria-label="打开菜单">☰</button>
   <div class="mobile-overlay" id="mobileOverlay" onclick="toggleNav()"></div>` : ''}
   <header>
-    ${currentTheme.layout === 'simple' ? `<div class="simple-header"><nav class="simple-nav"><a href="/">首页</a><a href="/#search-input">文章</a></nav><img class="simple-avatar" src="/icon/profile.png" alt="${escapeHtml(siteAuthor)}"><div class="simple-author">${escapeHtml(siteAuthor)}</div>${settings.site_bio ? `<p class="simple-bio">${escapeHtml(settings.site_bio)}</p>` : ''}</div>` : ''}
+    ${currentTheme.layout === 'simple' ? `<div class="simple-header"><nav class="simple-nav"><a href="/">首页</a><a href="/#search-input">文章</a></nav><img class="simple-avatar" src="/icon/profile.png" alt="${escapeHtml(siteAuthor)}"></div>` : ''}
     <h1><a href="/">${escapeHtml(siteName)}</a></h1>
     ${siteDesc ? `<p>${escapeHtml(siteDesc)}</p>` : ''}
   </header>
