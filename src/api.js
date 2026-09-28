@@ -4,6 +4,7 @@ import { json, errorResponse, generateSlug, generateExcerpt, escapeHtml } from '
 import { generateToken, authenticateRequest, hashPassword, verifyPasswordHash } from './lib/auth.js';
 import { getSettings, saveSettings, getRateAttempts, setRateAttempts, clearRateAttempts } from './lib/db.js';
 import { themes, validateDiyTheme } from './themes/index.js';
+import { getFrontendHTML, THEME_PREVIEW_CSP } from './views/frontend.js';
 import { handleUpload, listImages, uploadImage } from './lib/image.js';
 import { generateAgentKey } from './lib/agent-auth.js';
 import { purgeCache, withCache } from './lib/cache.js';
@@ -109,6 +110,7 @@ const ROUTES = [
   { method: 'GET',    path: '/api/admin/posts',           auth: true,  handler: handleAdminGetPosts },
   { method: 'GET',    path: '/api/admin/post',            auth: true,  handler: handleAdminGetPost },
   { method: 'GET',    path: '/api/admin/settings',        auth: true,  handler: (req, env) => handleAdminGetSettings(env) },
+  { method: 'POST',   path: '/api/admin/theme-preview',   auth: true,  handler: handleThemePreview },
   { method: 'POST',   path: '/api/admin/post',            auth: true,  handler: handleCreatePost },
   { method: 'PUT',    path: '/api/admin/post',            auth: true,  handler: handleUpdatePost },
   { method: 'DELETE', path: '/api/admin/post',            auth: true,  handler: handleDeletePost },
@@ -605,6 +607,37 @@ ${items}
 }
 
 // ==================== 管理 API 实现 ====================
+
+async function handleThemePreview(request, env) {
+  let body;
+  try { body = await request.json(); } catch { return errorResponse('预览参数格式错误', 400); }
+  if (!body || typeof body !== 'object' || Array.isArray(body) ||
+      typeof body.site_theme !== 'string' || !Object.hasOwn(themes, body.site_theme)) {
+    return errorResponse('无效的主题', 400);
+  }
+  let diy;
+  if (body.diy_theme !== undefined) {
+    try { diy = typeof body.diy_theme === 'string' ? JSON.parse(body.diy_theme) : body.diy_theme; }
+    catch { return errorResponse('自定义主题格式错误', 400); }
+    if (!validateDiyTheme(diy)) return errorResponse('自定义主题参数不合法', 400);
+  }
+  // 只复制展示字段，避免将密码、密钥或站点注入配置带入 iframe。
+  const saved = await getSettings(env);
+  const settings = { site_theme: body.site_theme, diy_theme: diy === undefined ? saved.diy_theme : JSON.stringify(diy) };
+  for (const key of ['site_name', 'site_description', 'site_bio', 'site_author', 'links_title', 'enable_tag_cloud', 'profile_position', 'tag_cloud_position']) {
+    settings[key] = saved[key];
+  }
+  return new Response(getFrontendHTML(settings, new URL(request.url).origin + '/', { preview: true }), {
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Content-Security-Policy': THEME_PREVIEW_CSP + "; sandbox; frame-ancestors 'self'",
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'no-referrer',
+      'X-Robots-Tag': 'noindex, nofollow'
+    }
+  });
+}
 
 async function handleAdminGetPosts(request, env) {
   const page = Math.max(1, parseInt(new URL(request.url).searchParams.get('page'), 10) || 1);

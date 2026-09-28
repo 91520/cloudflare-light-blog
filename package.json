@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "npx wrangler dev",
     "deploy": "npx wrangler deploy",
-    "check": "node --check src/worker.js && node --check src/api.js && node --check src/mcp.js && node --check src/lib/db.js && node --check src/lib/auth.js && node --check src/lib/cookie-auth.js && node --check src/lib/utils.js && node --check src/lib/cache.js && node --check src/lib/image.js && node --check src/lib/agent-auth.js",
+    "check": "node --check src/worker.js && node --check src/api.js && node --check src/mcp.js && node --check src/lib/db.js && node --check src/lib/auth.js && node --check src/lib/cookie-auth.js && node --check src/lib/utils.js && node --check src/lib/cache.js && node --check src/lib/image.js && node --check src/lib/agent-auth.js && node --check src/views/admin.js && node --check src/views/frontend.js",
     "test": "node --test \"test/**/*.test.js\""
   },
   "dependencies": {},

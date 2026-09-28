@@ -2,6 +2,7 @@
 node_modules/
 .wrangler/
 .tmp-*/
+/outputs/
 
 # 本地环境变量与密钥（只提交 .env.example）
 .env

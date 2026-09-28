@@ -4,8 +4,14 @@ import { escapeHtml, renderAdContent, safeJsonLd } from '../lib/utils.js';
 import { getTheme } from '../themes/index.js';
 import { simpleBaseCSS, simpleHomeCSS } from '../themes/simple-layout.js';
 
-export function getFrontendHTML(settings, requestUrl) {
+// meta 策略同样保护通过 srcdoc 加载的预览；不加载脚本、API 或外部字体。
+export const THEME_PREVIEW_CSP = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-src 'none'";
+
+export function getFrontendHTML(settings, requestUrl, { preview = false } = {}) {
   settings = settings || {};
+  if (preview) {
+    settings = { ...settings, custom_js: '', iconfont_css: '', ad_content: '', ad_position: '', site_footer: '', site_created_at: '' };
+  }
   const siteName = settings.site_name || '我的博客';
   const siteDesc = settings.site_description || '';
   const siteAuthor = settings.site_author || siteName;
@@ -24,19 +30,28 @@ export function getFrontendHTML(settings, requestUrl) {
     "url": requestUrl || '/'
   });
 
+  const previewAvatar = preview ? 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="50" fill="#e8e0cc"/><circle cx="50" cy="35" r="18" fill="#9f927d"/><path d="M18 100v-12a32 32 0 0 1 64 0v12" fill="#9f927d"/></svg>') : '';
+  const previewPosts = preview ? [
+    { title: '让文字拥有自己的颜色', excerpt: '这是一篇示例文章，用于查看标题、摘要、封面和阅读按钮的真实主题效果。主题切换仅影响此预览，不会修改已保存设置。', category: '生活记录', tags: ['随笔', '灵感'] },
+    { title: '记录日常，分享新的发现', excerpt: '从一段简洁的文字开始，记录学习与生活中的点滴。这里展示较长摘要在不同屏幕宽度下的排版、行距和卡片边界。', category: '技术笔记', tags: ['设计', '博客'] },
+    { title: '一个安静的阅读空间', excerpt: '示例内容不包含真实文章或敏感信息。链接与搜索仅用于展示外观，不会触发跳转或请求。', category: '生活记录', tags: ['阅读'] }
+  ].map(post => `<article class="post-card"><div class="post-cover"><span style="color:var(--text-secondary)">示例封面</span></div><div class="post-content"><h2><a>${post.title}</a></h2><p style="color:var(--text-body);font-size:0.9em;line-height:1.7;margin:8px 0">${post.excerpt}</p><div style="margin:8px 0 0">${post.tags.map(tag => `<span class="post-tag" style="display:inline-block;padding:3px 10px;background:var(--body-bg);color:var(--btn-shadow);font-size:0.72em;font-weight:700;margin-right:6px;border:1.5px solid var(--btn-bg);border-radius:50px">${tag}</span>`).join('')}</div><div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px"><div class="meta"><span>${post.category}</span><span>2026年1月1日</span></div><a class="read-more">阅读更多</a></div></div></article>`).join('') + '<div class="pagination"><span class="current">1</span><a>2</a><a>下一页</a></div>' : '';
+  const previewTags = preview ? '<a class="tag-item" style="padding:5px 14px;background:var(--btn-bg);color:#fff;border-radius:50px;font-size:13px">随笔</a><a class="tag-item" style="padding:5px 14px;background:var(--card-border);color:var(--text-body);border-radius:50px;font-size:13px">设计</a>' : '';
+
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
+  ${preview ? `<meta http-equiv="Content-Security-Policy" content="${escapeHtml(THEME_PREVIEW_CSP)}"><meta name="referrer" content="no-referrer">` : ''}
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${escapeHtml(siteName)}</title>
   <meta name="description" content="${escapeHtml(siteDesc || siteName + ' - 基于 Cloudflare Workers 构建的轻量级博客')}">
   <meta name="author" content="${escapeHtml(siteAuthor)}">
-  <meta name="robots" content="index, follow">
-  <link rel="canonical" href="/">
+  <meta name="robots" content="${preview ? 'noindex, nofollow' : 'index, follow'}">
+  ${preview ? '' : `<link rel="canonical" href="/">
   <link rel="sitemap" href="/sitemap.xml">
   <link rel="alternate" type="application/rss+xml" title="${escapeHtml(siteName)}" href="/rss.xml">
-  <link rel="icon" href="/icon/favicon.ico">
+  <link rel="icon" href="/icon/favicon.ico">`}
   <!-- Open Graph -->
   <meta property="og:type" content="website">
   <meta property="og:title" content="${escapeHtml(siteName)}">
@@ -47,8 +62,8 @@ export function getFrontendHTML(settings, requestUrl) {
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="${escapeHtml(siteName)}">
   <meta name="twitter:description" content="${escapeHtml(siteDesc || siteName + ' - 基于 Cloudflare Workers 构建的轻量级博客')}">
-  <script type="application/ld+json">${homepageJsonLd}</script>
-  ${currentTheme.fontUrl ? `<link href="${currentTheme.fontUrl}" rel="stylesheet">` : ''}
+  ${preview ? '' : `<script type="application/ld+json">${homepageJsonLd}</script>`}
+  ${!preview && currentTheme.fontUrl ? `<link href="${currentTheme.fontUrl}" rel="stylesheet">` : ''}
   ${iconfontTag}
   <style>
     :root {
@@ -144,14 +159,15 @@ export function getFrontendHTML(settings, requestUrl) {
       filter: brightness(0.95);
     }
     ${currentTheme.layout === 'simple' ? simpleBaseCSS + simpleHomeCSS : ''}
+    ${preview ? 'a { cursor: default; } #search-input { pointer-events: none; }' : ''}
   </style>
 </head>
 <body>
-  ${hasSidebar ? `<button class="mobile-nav-toggle" onclick="toggleNav()" aria-label="打开菜单">☰</button>
+  ${hasSidebar && !preview ? `<button class="mobile-nav-toggle" onclick="toggleNav()" aria-label="打开菜单">☰</button>
   <div class="mobile-overlay" id="mobileOverlay" onclick="toggleNav()"></div>` : ''}
   <header>
-    ${currentTheme.layout === 'simple' ? `<div class="simple-header"><nav class="simple-nav"><a href="/">首页</a><a href="/#search-input">文章</a></nav><img class="simple-avatar" src="/icon/profile.png" alt="${escapeHtml(siteAuthor)}"></div>` : ''}
-    <h1><a href="/">${escapeHtml(siteName)}</a></h1>
+    ${currentTheme.layout === 'simple' ? `<div class="simple-header"><nav class="simple-nav"><a ${preview ? '' : 'href="/"'}>首页</a><a ${preview ? '' : 'href="/#search-input"'}>文章</a></nav><img class="simple-avatar" src="${preview ? previewAvatar : '/icon/profile.png'}" alt="${escapeHtml(siteAuthor)}"></div>` : ''}
+    <h1><a ${preview ? '' : 'href="/"'}>${escapeHtml(siteName)}</a></h1>
     ${siteDesc ? `<p>${escapeHtml(siteDesc)}</p>` : ''}
   </header>
   <main>
@@ -160,24 +176,24 @@ export function getFrontendHTML(settings, requestUrl) {
     <aside class="sidebar">
       ${settings.profile_position === 'left' ? `
       <div class="profile-card">
-        <img class="avatar" src="/icon/profile.png" alt="${escapeHtml(siteAuthor)}">
+        <img class="avatar" src="${preview ? previewAvatar : '/icon/profile.png'}" alt="${escapeHtml(siteAuthor)}">
         <div class="name">${escapeHtml(siteAuthor)}</div>
         ${siteBio ? `<div class="bio">${escapeHtml(siteBio)}</div>` : ''}
         <div class="stats">
-          <div class="stat-item"><div id="stat-posts" class="stat-num">-</div><div class="stat-label">文章</div></div>
-          <div class="stat-item"><div id="stat-cats" class="stat-num">-</div><div class="stat-label">分类</div></div>
-          <div class="stat-item"><div id="stat-tags" class="stat-num">-</div><div class="stat-label">标签</div></div>
+          <div class="stat-item"><div id="stat-posts" class="stat-num">${preview ? '3' : '-'}</div><div class="stat-label">文章</div></div>
+          <div class="stat-item"><div id="stat-cats" class="stat-num">${preview ? '2' : '-'}</div><div class="stat-label">分类</div></div>
+          <div class="stat-item"><div id="stat-tags" class="stat-num">${preview ? '5' : '-'}</div><div class="stat-label">标签</div></div>
         </div>
         <div style="border-bottom:2px solid ${currentTheme.cardBorder};margin-bottom:14px"></div>
-        <h4><img src="/icon/category.png" style="width:22px;height:22px;vertical-align:middle;margin-right:6px">分类</h4>
-        <div id="category-list" class="category-list"></div>
-        <h4><img src="/icon/friend-links.png" style="width:22px;height:22px;vertical-align:middle;margin-right:6px">${escapeHtml(settings.links_title || '友链')}</h4>
-        <div id="link-list" class="link-list"></div>
+        <h4>${preview ? '' : '<img src="/icon/category.png" style="width:22px;height:22px;vertical-align:middle;margin-right:6px">'}分类</h4>
+        <div id="category-list" class="category-list">${preview ? '<a>全部</a><a>生活记录</a><a>技术笔记</a>' : ''}</div>
+        <h4>${preview ? '' : '<img src="/icon/friend-links.png" style="width:22px;height:22px;vertical-align:middle;margin-right:6px">'}${escapeHtml(settings.links_title || '友链')}</h4>
+        <div id="link-list" class="link-list">${preview ? '<a>示例友链</a>' : ''}</div>
       </div>
       ` : ''}
       ${settings.enable_tag_cloud !== '0' && settings.tag_cloud_position === 'left' ? `
       <div class="profile-card" style="margin-top:16px">
-        <div id="tag-cloud-left" class="tag-cloud" style="display:flex;flex-wrap:wrap;gap:8px;padding:8px 0"></div>
+        <div id="tag-cloud-left" class="tag-cloud" style="display:flex;flex-wrap:wrap;gap:8px;padding:8px 0">${preview ? previewTags : ''}</div>
       </div>
       ` : ''}
       ${settings.ad_content && settings.ad_position === 'left' ? `
@@ -190,10 +206,10 @@ export function getFrontendHTML(settings, requestUrl) {
     <!-- 文章列表 -->
     <div class="post-list">
       <div style="margin-bottom:16px">
-        <input id="search-input" type="text" placeholder="搜索文章标题或标签……" style="width:100%;padding:12px 18px;border:2px solid ${currentTheme.cardBorder};border-radius:14px;font-size:15px;background:${currentTheme.cardBg};color:${currentTheme.textBody};outline:none;transition:border-color 0.2s;box-shadow:0 2px 8px rgba(107,92,67,0.08)">
+        <input id="search-input" type="text" ${preview ? 'disabled' : ''} placeholder="搜索文章标题或标签……" style="width:100%;padding:12px 18px;border:2px solid ${currentTheme.cardBorder};border-radius:14px;font-size:15px;background:${currentTheme.cardBg};color:${currentTheme.textBody};outline:none;transition:border-color 0.2s;box-shadow:0 2px 8px rgba(107,92,67,0.08)">
       </div>
       <div id="app">
-        <p style="text-align:center;color:${currentTheme.textSecondary};">加载中...</p>
+        ${preview ? previewPosts : `<p style="text-align:center;color:${currentTheme.textSecondary};">加载中...</p>`}
       </div>
     </div>
     <!-- 右侧边栏 -->
@@ -201,24 +217,24 @@ export function getFrontendHTML(settings, requestUrl) {
     <aside class="sidebar-right">
       ${settings.profile_position === 'right' ? `
       <div class="profile-card">
-        <img class="avatar" src="/icon/profile.png" alt="${escapeHtml(siteAuthor)}">
+        <img class="avatar" src="${preview ? previewAvatar : '/icon/profile.png'}" alt="${escapeHtml(siteAuthor)}">
         <div class="name">${escapeHtml(siteAuthor)}</div>
         ${siteBio ? `<div class="bio">${escapeHtml(siteBio)}</div>` : ''}
         <div class="stats">
-          <div class="stat-item"><div id="stat-posts" class="stat-num">-</div><div class="stat-label">文章</div></div>
-          <div class="stat-item"><div id="stat-cats" class="stat-num">-</div><div class="stat-label">分类</div></div>
-          <div class="stat-item"><div id="stat-tags" class="stat-num">-</div><div class="stat-label">标签</div></div>
+          <div class="stat-item"><div id="stat-posts" class="stat-num">${preview ? '3' : '-'}</div><div class="stat-label">文章</div></div>
+          <div class="stat-item"><div id="stat-cats" class="stat-num">${preview ? '2' : '-'}</div><div class="stat-label">分类</div></div>
+          <div class="stat-item"><div id="stat-tags" class="stat-num">${preview ? '5' : '-'}</div><div class="stat-label">标签</div></div>
         </div>
         <div style="border-bottom:2px solid ${currentTheme.cardBorder};margin-bottom:14px"></div>
-        <h4><img src="/icon/category.png" style="width:22px;height:22px;vertical-align:middle;margin-right:6px">分类</h4>
-        <div id="category-list" class="category-list"></div>
-        <h4><img src="/icon/friend-links.png" style="width:22px;height:22px;vertical-align:middle;margin-right:6px">${escapeHtml(settings.links_title || '友链')}</h4>
-        <div id="link-list" class="link-list"></div>
+        <h4>${preview ? '' : '<img src="/icon/category.png" style="width:22px;height:22px;vertical-align:middle;margin-right:6px">'}分类</h4>
+        <div id="category-list" class="category-list">${preview ? '<a>全部</a><a>生活记录</a><a>技术笔记</a>' : ''}</div>
+        <h4>${preview ? '' : '<img src="/icon/friend-links.png" style="width:22px;height:22px;vertical-align:middle;margin-right:6px">'}${escapeHtml(settings.links_title || '友链')}</h4>
+        <div id="link-list" class="link-list">${preview ? '<a>示例友链</a>' : ''}</div>
       </div>
       ` : ''}
       ${settings.enable_tag_cloud !== '0' && settings.tag_cloud_position === 'right' ? `
       <div class="profile-card" style="margin-top:16px">
-        <div id="tag-cloud-right" class="tag-cloud" style="display:flex;flex-wrap:wrap;gap:8px;padding:8px 0"></div>
+        <div id="tag-cloud-right" class="tag-cloud" style="display:flex;flex-wrap:wrap;gap:8px;padding:8px 0">${preview ? previewTags : ''}</div>
       </div>
       ` : ''}
       ${settings.ad_content && settings.ad_position === 'right' ? `
@@ -229,9 +245,9 @@ export function getFrontendHTML(settings, requestUrl) {
     </aside>
     ` : ''}
   </main>
-  <button class="back-to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+  ${preview ? '' : `<button class="back-to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>`}
   <footer>${(function(){var f=settings.site_footer || '&copy; 2026 ' + escapeHtml(siteName);if(settings.site_created_at){var d=new Date(settings.site_created_at);var now=new Date();var bjNow=new Date(now.getTime()+8*3600000);var bjCreated=new Date(d.getTime()+8*3600000);var days=Math.floor((Date.UTC(bjNow.getUTCFullYear(),bjNow.getUTCMonth(),bjNow.getUTCDate())-Date.UTC(bjCreated.getUTCFullYear(),bjCreated.getUTCMonth(),bjCreated.getUTCDate()))/86400000);var dateStr=d.getFullYear()+'年'+(d.getMonth()+1)+'月'+d.getDate()+'日';f=f.split('{{days_running}}').join(days).split('{{site_created_at}}').join(dateStr);}return f;})()}</footer>
-  <script>
+  ${preview ? '' : `<script>
     // 主题颜色
     var themeColors = {
       btnBg: '${currentTheme.btnBg}',
@@ -467,7 +483,7 @@ export function getFrontendHTML(settings, requestUrl) {
       if(!scripts.length)document.body.appendChild(d);
     }
   })();
-  </script>
+  </script>`}
 </body>
 </html>`;
 }
