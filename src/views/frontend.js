@@ -1,6 +1,6 @@
 // ==================== 前台首页（SEO 优化 + 分页）====================
 
-import { escapeHtml, renderAdContent } from '../lib/utils.js';
+import { escapeHtml, renderAdContent, safeJsonLd } from '../lib/utils.js';
 import { getTheme } from '../themes/index.js';
 import { simpleBaseCSS, simpleHomeCSS } from '../themes/simple-layout.js';
 
@@ -16,7 +16,8 @@ export function getFrontendHTML(settings, requestUrl) {
   const iconfontTag = iconfontUrl ? (iconfontUrl.split('?')[0].endsWith('.js') ? `<script src="${iconfontUrl}"></script>` : `<link href="${iconfontUrl}" rel="stylesheet">`) : '';
   const hasSidebar = settings.profile_position === 'left' || settings.tag_cloud_position === 'left' || settings.ad_position === 'left' || settings.profile_position === 'right' || settings.tag_cloud_position === 'right' || settings.ad_position === 'right';
 
-  const homepageJsonLd = JSON.stringify({
+  // JSON-LD 内联在 <script> 中，必须转义 < 与 > 防止站点名里的 </script> 提前闭合标签
+  const homepageJsonLd = safeJsonLd({
     "@context": "https://schema.org",
     "@type": "WebSite",
     "name": siteName,

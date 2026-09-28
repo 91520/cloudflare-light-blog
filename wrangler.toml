@@ -32,6 +32,13 @@ bucket_name = "blog-images"
 # [vars]
 # ALLOWED_ORIGIN = "*"
 
+# ============================================
+# 定时任务：每天 03:00 UTC 清理过期限流记录
+# 对应的处理函数为 src/worker.js 的 scheduled()
+# ============================================
+[triggers]
+crons = ["0 3 * * *"]
+
 [observability]
 enabled = true
 

@@ -1,13 +1,14 @@
 // ==================== Cloudflare Light Blog - 主入口 ====================
 // 模块化架构 | HMAC 认证 | 分页 | 缓存 | SEO
 
-import { html, json, errorResponse, handleOptions, getCorsHeaders, escapeHtml, deriveHMACKey } from './lib/utils.js';
-import { initDB, getSettings } from './lib/db.js';
+import { html, json, errorResponse, handleOptions, getCorsHeaders, escapeHtml } from './lib/utils.js';
+import { initDB, getSettings, cleanupRateLimits } from './lib/db.js';
 import { authenticateRequest, verifyPasswordHash } from './lib/auth.js';
 import { handleImage } from './lib/image.js';
 import { handleMcpRequest } from './mcp.js';
 import { withCache } from './lib/cache.js';
 import { handleAPI } from './api.js';
+import { verifySiteAuthCookie, verifyPostAuthCookie, readCookie, postCookieName, SITE_COOKIE } from './lib/cookie-auth.js';
 import { getFrontendHTML } from './views/frontend.js';
 import { getPostHTML } from './views/post.js';
 import { getPasswordHTML } from './views/password.js';
@@ -42,11 +43,10 @@ export default {
     try {
       // 全站密码保护检查
       if (siteSettings.site_password && path !== '/api/site-auth') {
-        const cookie = request.headers.get('Cookie') || '';
-        const authMatch = cookie.match(/site_auth=([^;]+)/);
-        if (authMatch) {
+        const siteCookie = readCookie(request, SITE_COOKIE);
+        if (siteCookie) {
           // 验证 cookie 有效性（HMAC + 24小时过期）
-          const valid = await verifySiteAuth(authMatch[1], siteSettings.site_password);
+          const valid = await verifySiteAuthCookie(siteCookie, siteSettings.site_password);
           if (!valid) {
             return showSitePasswordPage(siteSettings);
           }
@@ -123,6 +123,15 @@ export default {
       console.error('[Worker] 未捕获错误:', e.message || 'Error');
       return errorResponse('服务器错误', 500, e);
     }
+  },
+
+  /**
+   * 定时任务：清理过期的限流记录，避免 rate_limits 表无限增长。
+   * 需在 wrangler.toml 配置 [triggers] crons。
+   */
+  async scheduled(event, env, ctx) {
+    await ensureDB(env);
+    ctx.waitUntil(cleanupRateLimits(env));
   }
 };
 
@@ -139,40 +148,6 @@ async function handleFrontendPage(request, env, ctx) {
 }
 
 
-
-/**
- * 验证文章密码 cookie
- */
-async function verifyPostAuth(cookieValue, passwordHash, postId) {
-  try {
-    const parts = cookieValue.split('.');
-    if (parts.length !== 2) return false;
-    const timestamp = parseInt(parts[0]);
-    if (isNaN(timestamp)) return false;
-    if (Date.now() - timestamp > 86400000) return false;
-    const key = await deriveHMACKey(passwordHash, 'post-auth-' + postId);
-    const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode('post_auth:' + timestamp));
-    const expected = Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
-    return parts[1] === expected;
-  } catch { return false; }
-}
-
-/**
- * 验证全站密码 cookie
- */
-async function verifySiteAuth(cookieValue, password) {
-  try {
-    const parts = cookieValue.split('.');
-    if (parts.length !== 2) return false;
-    const timestamp = parseInt(parts[0]);
-    if (isNaN(timestamp)) return false;
-    if (Date.now() - timestamp > 86400000) return false;
-    const key = await deriveHMACKey(password, 'site-auth');
-    const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode('site_auth:' + timestamp));
-    const expected = Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
-    return parts[1] === expected;
-  } catch { return false; }
-}
 
 /**
  * 显示全站密码页面
@@ -352,11 +327,10 @@ async function renderPostPage(request, env, id, providedPassword, ctx) {
   // 检查密码保护
   if (post.password && post.password !== '') {
     // 检查 cookie
-    const cookie = request.headers.get('Cookie') || '';
-    const authMatch = cookie.match(new RegExp('post_auth_' + id + '=([^;]+)'));
+    const authCookie = readCookie(request, postCookieName(id));
     let authenticated = false;
-    if (authMatch) {
-      authenticated = await verifyPostAuth(authMatch[1], post.password, id);
+    if (authCookie) {
+      authenticated = await verifyPostAuthCookie(authCookie, post.password, id);
     }
     // 兼容 URL 参数（旧方式，使用哈希比较）
     if (providedPassword) {

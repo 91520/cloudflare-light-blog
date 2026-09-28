@@ -1,18 +1,21 @@
 // ==================== API 处理模块（分页 + 错误处理）====================
 
-import { json, errorResponse, generateSlug, generateExcerpt, deriveHMACKey, escapeHtml } from './lib/utils.js';
+import { json, errorResponse, generateSlug, generateExcerpt, escapeHtml } from './lib/utils.js';
 import { generateToken, authenticateRequest, hashPassword, verifyPasswordHash } from './lib/auth.js';
-import { getSettings, saveSettings } from './lib/db.js';
+import { getSettings, saveSettings, getRateAttempts, setRateAttempts, clearRateAttempts } from './lib/db.js';
 import { themes, validateDiyTheme } from './themes/index.js';
-import { handleUpload, listImages } from './lib/image.js';
+import { handleUpload, listImages, uploadImage } from './lib/image.js';
 import { generateAgentKey } from './lib/agent-auth.js';
 import { purgeCache, withCache } from './lib/cache.js';
+import {
+  signSiteAuthCookie, signPostAuthCookie, buildSessionCookie,
+  SITE_COOKIE, postCookieName
+} from './lib/cookie-auth.js';
 
 // ==================== 常量 ====================
 const RATE_MAX_5 = 5;                    // 最大尝试次数
 const RATE_WINDOW_10M = 10 * 60 * 1000;  // 10分钟窗口
 const RATE_WINDOW_1H = 60 * 60 * 1000;   // 1小时窗口
-const COOKIE_MAX_AGE = 86400;            // Cookie 有效期 24小时（秒）
 
 // ADMIN_PASSWORD 哈希缓存（避免每次登录重复 PBKDF2 派生）
 let adminPasswordHashCache = null;
@@ -42,21 +45,18 @@ async function purgePublicCaches(request) {
 // ==================== 公共函数 ====================
 
 /**
- * 速率限制：检查并记录（合并为单次操作减少竞态窗口）
+ * 速率限制：检查并记录
+ * 记录存放在独立的 rate_limits 表，与 settings 解耦，并带过期时间便于清理。
  * @returns {boolean} true=允许, false=超限
  */
 export async function checkRateLimit(env, key, maxAttempts, windowMs) {
   try {
     const now = Date.now();
-    const row = await env.DB.prepare("SELECT value FROM settings WHERE key=?").bind(key).first();
-    let attempts = [];
-    if (row) { try { attempts = JSON.parse(row.value); } catch (e) {} }
-    // 清理过期记录
-    attempts = attempts.filter(t => now - t < windowMs);
+    const attempts = await getRateAttempts(env, key, windowMs);
     if (attempts.length >= maxAttempts) return false;
     // 记录本次尝试
     attempts.push(now);
-    await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").bind(key, JSON.stringify(attempts)).run();
+    await setRateAttempts(env, key, attempts, now + windowMs);
     return true;
   } catch (e) { console.error('[RateLimit]', e.message || 'Error'); return true; }
 }
@@ -65,33 +65,68 @@ export async function checkRateLimit(env, key, maxAttempts, windowMs) {
  * 清除速率限制记录
  */
 async function clearRateLimit(env, key) {
-  try { await env.DB.prepare("DELETE FROM settings WHERE key=?").bind(key).run(); } catch (e) {}
+  try { await clearRateAttempts(env, key); } catch (e) {}
 }
 
 
 
 /**
- * 生成站点认证 Cookie
+ * 处理所有 API 请求
  */
-async function generateSiteAuthCookie(password) {
-  const timestamp = Date.now();
-  const key = await deriveHMACKey(password, 'site-auth');
-  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode('site_auth:' + timestamp));
-  const sigHex = Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
-  return timestamp + '.' + sigHex;
-}
+// ==================== 路由表 ====================
+// 显式声明每个接口的路径、方法、处理函数与是否需要管理员鉴权。
+// 早期用连续的 if 判断分发，公开接口与需鉴权接口仅靠"代码位置"分隔
+// （鉴权检查写在中间），一旦有人往中间插入新路由就会意外开放未鉴权接口。
+// 改为路由表后，鉴权由 auth 字段显式声明，不再依赖顺序。
+//
+// 匹配规则：path 为字符串时精确匹配；为 RegExp 时按正则匹配（用 pathname，
+// 不含查询串，因为 ?id= 这类参数由处理函数自行解析）。
 
-/**
- * 生成文章认证 Cookie
- */
-async function generatePostAuthCookie(postId, passwordHash) {
-  const timestamp = Date.now();
-  const encoder = new TextEncoder();
-  const key = await deriveHMACKey(passwordHash, 'post-auth-' + postId);
-  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode('post_auth:' + timestamp));
-  const sigHex = Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
-  return timestamp + '.' + sigHex;
-}
+const ROUTES = [
+  // ---- 认证类（公开）----
+  { method: 'POST',   path: '/api/post-auth',             auth: false, handler: handlePostAuth },
+  { method: 'POST',   path: '/api/site-auth',             auth: false, handler: handleSiteAuth },
+  { method: 'POST',   path: '/api/login',                 auth: false, handler: handleLogin },
+
+  // ---- 系统（公开）----
+  { method: 'GET',    path: '/api/health',                auth: false, handler: handleHealth },
+  { method: 'GET',    path: '/sitemap.xml',               auth: false, handler: handleSitemap },
+  { method: 'GET',    path: '/rss.xml',                   auth: false, handler: handleRSS },
+
+  // ---- 公开 API（带缓存）----
+  { method: 'GET',    path: '/api/posts',                 auth: false, handler: handleGetPostsRoute },
+  { method: 'GET',    path: '/api/page-meta',             auth: false, handler: (req, env) => withCache(req, () => handleGetPageMeta(env), 60) },
+  { method: 'GET',    path: '/api/categories',            auth: false, handler: (req, env) => withCache(req, () => handleGetCategories(env), 60) },
+  { method: 'GET',    path: '/api/settings',              auth: false, handler: (req, env) => handleGetSettings(env) },
+  { method: 'GET',    path: '/api/proxy-css',             auth: false, handler: handleProxyCss },
+  { method: 'GET',    path: '/api/stats',                 auth: false, handler: (req, env) => withCache(req, () => handleGetStats(env), 60) },
+  { method: 'GET',    path: '/api/links',                 auth: false, handler: (req, env) => withCache(req, () => handleGetLinks(env), 60) },
+  { method: 'GET',    path: '/api/related-posts',         auth: false, handler: (req, env) => withCache(req, () => handleGetRelatedPosts(req, env), 60, true) },
+  { method: 'GET',    path: '/api/tags',                  auth: false, handler: (req, env) => withCache(req, () => handleGetTags(env), 60) },
+
+  // ---- 管理 API（需管理员鉴权）----
+  { method: 'POST',   path: '/api/upload',                auth: true,  handler: handleUploadAPI },
+  { method: 'GET',    path: '/api/admin/posts',           auth: true,  handler: handleAdminGetPosts },
+  { method: 'GET',    path: '/api/admin/post',            auth: true,  handler: handleAdminGetPost },
+  { method: 'GET',    path: '/api/admin/settings',        auth: true,  handler: (req, env) => handleAdminGetSettings(env) },
+  { method: 'POST',   path: '/api/admin/post',            auth: true,  handler: handleCreatePost },
+  { method: 'PUT',    path: '/api/admin/post',            auth: true,  handler: handleUpdatePost },
+  { method: 'DELETE', path: '/api/admin/post',            auth: true,  handler: handleDeletePost },
+  { method: 'GET',    path: '/api/admin/trash',           auth: true,  handler: (req, env) => handleGetTrash(env) },
+  { method: 'POST',   path: '/api/admin/restore',         auth: true,  handler: handleRestorePost },
+  { method: 'POST',   path: '/api/admin/permanent-delete',auth: true,  handler: handlePermanentDelete },
+  { method: 'POST',   path: '/api/admin/import-wordpress',auth: true,  handler: handleImportWordPress },
+  { method: 'POST',   path: '/api/category',              auth: true,  handler: handleSaveCategory },
+  { method: 'DELETE', path: /^\/api\/category\/?$/,       auth: true,  handler: handleDeleteCategory },
+  { method: 'POST',   path: '/api/settings',              auth: true,  handler: handleSaveSettings },
+  { method: 'POST',   path: '/api/delete-image',          auth: true,  handler: handleDeleteImage },
+  { method: 'GET',    path: '/api/admin/images',          auth: true,  handler: handleListImagesAdmin },
+  { method: 'DELETE', path: '/api/admin/images',          auth: true,  handler: handleDeleteImageAdmin },
+  { method: 'GET',    path: '/api/admin/agent-keys',      auth: true,  handler: (req, env) => handleListAgentKeys(env) },
+  { method: 'POST',   path: '/api/admin/agent-keys',      auth: true,  handler: handleCreateAgentKey },
+  { method: 'POST',   path: '/api/admin/agent-keys/reset',auth: true,  handler: handleResetAgentKey },
+  { method: 'DELETE', path: '/api/admin/agent-keys',      auth: true,  handler: handleRevokeAgentKey }
+];
 
 /**
  * 处理所有 API 请求
@@ -100,233 +135,153 @@ export async function handleAPI(request, env, path) {
   const method = request.method;
 
   try {
-    // ========== 文章密码认证（5次/1小时限制）==========
-    if (path === '/api/post-auth' && method === 'POST') {
-      try {
-        const body = await request.json();
-        const { postId, password } = body;
-        if (!postId || !password) return json({ success: false, error: '参数错误' }, 400);
-        if (!Number.isFinite(Number(postId))) return json({ success: false, error: '参数错误' }, 400);
+    // 去掉末尾斜杠后再匹配，兼容 /api/posts 与 /api/posts/
+    const normalized = path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
 
-        const clientIP = request.headers.get('CF-Connecting-IP') || 'unknown';
-        const rateKey = 'post_auth_rate_' + clientIP + '_' + postId;
-        if (!await checkRateLimit(env, rateKey, RATE_MAX_5, RATE_WINDOW_1H)) {
-          return json({ success: false, error: '密码错误次数过多，请 1 小时后再试' }, 429);
-        }
+    const matchRoute = (r) =>
+      r.method === method &&
+      (r.path instanceof RegExp ? r.path.test(normalized) : r.path === normalized);
 
-        const post = await env.DB.prepare("SELECT password FROM posts WHERE id=? AND status IN ('published','publish')").bind(postId).first();
-        if (!post) return json({ success: false, error: '文章不存在' }, 404);
-        if (await verifyPasswordHash(password, post.password)) {
-          await clearRateLimit(env, rateKey);
-          const cookieValue = await generatePostAuthCookie(postId, post.password);
-          const resp = json({ success: true });
-          resp.headers.set('Set-Cookie', 'post_auth_' + postId + '=' + cookieValue + '; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=' + COOKIE_MAX_AGE);
-          return resp;
-        }
-        return json({ success: false, error: '密码错误' }, 401);
-      } catch (e) {
-        return json({ success: false, error: '认证失败' }, 500);
-      }
+    const route = ROUTES.find(matchRoute);
+
+    // 路径存在但方法不匹配 → 405；完全未知 → 404
+    if (!route) {
+      const pathExists = ROUTES.some(r =>
+        r.path instanceof RegExp ? r.path.test(normalized) : r.path === normalized
+      );
+      return errorResponse(pathExists ? '方法不允许' : '未找到接口', pathExists ? 405 : 404);
     }
 
-    // ========== 全站密码认证（5次/1小时限制）==========
-    if (path === '/api/site-auth' && method === 'POST') {
-      try {
-        const body = await request.json();
-        const settings = await getSettings(env);
-        if (!settings.site_password) {
-          return json({ success: true, message: '未设置全站密码' });
-        }
-
-        // 速率限制检查（5次/1小时）
-        const clientIP = request.headers.get('CF-Connecting-IP') || 'unknown';
-        const rateKey = 'site_auth_rate_' + clientIP;
-        if (!await checkRateLimit(env, rateKey, RATE_MAX_5, RATE_WINDOW_1H)) {
-          return json({ success: false, error: '密码错误次数过多，请 1 小时后再试' }, 429);
-        }
-
-        // 使用哈希验证密码
-        if (await verifyPasswordHash(body.password, settings.site_password)) {
-          await clearRateLimit(env, rateKey);
-          const cookieValue = await generateSiteAuthCookie(settings.site_password);
-          const resp = json({ success: true });
-          resp.headers.set('Set-Cookie', 'site_auth=' + cookieValue + '; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=' + COOKIE_MAX_AGE);
-          return resp;
-        }
-        // 记录失败尝试
-        return json({ success: false, error: '密码错误' }, 401);
-      } catch (e) {
-        console.error((e.message || 'Error').substring(0, 100));
-        return json({ success: false, error: '认证失败' }, 500);
-      }
+    // 需要鉴权的路由统一在此校验，与路由定义绑定，不依赖代码位置
+    if (route.auth) {
+      const isAuthed = await authenticateRequest(request, env);
+      if (!isAuthed) return errorResponse('未授权', 401);
     }
 
-    // ========== 登录接口 ==========
-    if (path === '/api/login' && method === 'POST') {
-      const body = await request.json();
-      if (!env.ADMIN_PASSWORD) {
-        return json({ success: false, error: '未配置管理员密码（ADMIN_PASSWORD），请先在 Cloudflare 后台设置后再登录' }, 503);
-      }
-
-      // 速率限制（5次/10分钟）
-      const clientIP = request.headers.get('CF-Connecting-IP') || 'unknown';
-      const rateKey = 'login_rate_' + clientIP;
-      if (!await checkRateLimit(env, rateKey, RATE_MAX_5, RATE_WINDOW_10M)) {
-        return json({ success: false, error: '登录尝试次数过多，请 10 分钟后再试' }, 429);
-      }
-
-      // 验证账号
-      if (env.ADMIN_USERNAME && body.username !== env.ADMIN_USERNAME) {
-        return json({ success: false, error: '账号错误' }, 401);
-      }
-
-      if (body.password && await verifyPasswordHash(body.password, await getAdminPasswordHash(env))) {
-        await clearRateLimit(env, rateKey);
-        const token = await generateToken(env.ADMIN_PASSWORD);
-        return json({ success: true, token });
-      }
-
-      return json({ success: false, error: '密码错误' }, 401);
-    }
-
-    // ========== 健康检查 ==========
-  if (path === '/api/health' && method === 'GET') {
-    try {
-      await env.DB.prepare("SELECT 1").first();
-      return json({ status: 'ok', db: 'connected', timestamp: new Date().toISOString() });
-    } catch (e) {
-      return json({ status: 'error', db: 'disconnected', timestamp: new Date().toISOString() }, 503);
-    }
-  }
-
-  // ========== Sitemap ==========
-    if (path === '/sitemap.xml' && method === 'GET') {
-      return handleSitemap(request, env);
-    }
-    if (path === '/rss.xml' && method === 'GET') {
-      return handleRSS(request, env);
-    }
-
-    // ========== 公开 API（不需要认证）==========
-    if (path === '/api/posts' && method === 'GET') {
-      // 仅缓存首页列表（第 1 页、无分类/标签筛选），60 秒
-      const url = new URL(request.url);
-      const page = url.searchParams.get('page') || '1';
-      if (page === '1' && !url.searchParams.get('category') && !url.searchParams.get('tag')) {
-        return withCache(request, () => handleGetPosts(request, env), 60, true);
-      }
-      return handleGetPosts(request, env);
-    }
-    if (path === '/api/page-meta' && method === 'GET') {
-      return withCache(request, () => handleGetPageMeta(env), 60);
-    }
-    if (path === '/api/categories' && method === 'GET') {
-      return withCache(request, () => handleGetCategories(env), 60);
-    }
-    if (path === '/api/settings' && method === 'GET') {
-      return handleGetSettings(env);
-    }
-    if (path === '/api/proxy-css' && method === 'GET') {
-      return handleProxyCss(request);
-    }
-    if (path === '/api/stats' && method === 'GET') {
-      return withCache(request, () => handleGetStats(env), 60);
-    }
-    if (path === '/api/links' && method === 'GET') {
-      return withCache(request, () => handleGetLinks(env), 60);
-    }
-    if (path === '/api/related-posts' && method === 'GET') {
-      return withCache(request, () => handleGetRelatedPosts(request, env), 60, true);
-    }
-    if (path === '/api/tags' && method === 'GET') {
-      return withCache(request, () => handleGetTags(env), 60);
-    }
-
-    // ========== 认证检查（以下 API 需要管理员权限）==========
-    const isAuthed = await authenticateRequest(request, env);
-    if (!isAuthed) {
-      return errorResponse('未授权', 401);
-    }
-
-    // ========== 管理 API ==========
-    if (path === '/api/upload' && method === 'POST') {
-      return handleUploadAPI(request, env);
-    }
-    if (path === '/api/admin/posts' && method === 'GET') {
-      return handleAdminGetPosts(request, env);
-    }
-    if (path === '/api/admin/post' && method === 'GET') {
-      return handleAdminGetPost(request, env);
-    }
-    if (path === '/api/admin/settings' && method === 'GET') {
-      return handleAdminGetSettings(env);
-    }
-    if (path === '/api/admin/post' && method === 'POST') {
-      return handleCreatePost(request, env);
-    }
-    if (path === '/api/admin/post' && method === 'PUT') {
-      return handleUpdatePost(request, env);
-    }
-    if (path === '/api/admin/post' && method === 'DELETE') {
-      return handleDeletePost(request, env);
-    }
-    if (path === '/api/admin/trash' && method === 'GET') {
-      return handleGetTrash(env);
-    }
-    if (path === '/api/admin/restore' && method === 'POST') {
-      return handleRestorePost(request, env);
-    }
-    if (path === '/api/admin/permanent-delete' && method === 'POST') {
-      return handlePermanentDelete(request, env);
-    }
-    if (path === '/api/admin/import-wordpress' && method === 'POST') {
-      return handleImportWordPress(request, env);
-    }
-
-    // 分类管理
-    if (path === '/api/category' && method === 'POST') {
-      return handleSaveCategory(request, env);
-    }
-    if (path.startsWith('/api/category') && method === 'DELETE') {
-      return handleDeleteCategory(request, env);
-    }
-
-    // 设置管理
-    if (path === '/api/settings' && method === 'POST') {
-      return handleSaveSettings(request, env);
-    }
-
-    // 删除图片
-    if (path === '/api/delete-image' && method === 'POST') {
-      return handleDeleteImage(request, env);
-    }
-
-    // 图片管理（列表：含文章封面图；删除：按 key 删除存储桶对象）
-    if (path === '/api/admin/images' && method === 'GET') {
-      return handleListImagesAdmin(request, env);
-    }
-    if (path === '/api/admin/images' && method === 'DELETE') {
-      return handleDeleteImageAdmin(request, env);
-    }
-
-    // Agent 密钥管理（MCP 接入）
-    if (path === '/api/admin/agent-keys' && method === 'GET') {
-      return handleListAgentKeys(env);
-    }
-    if (path === '/api/admin/agent-keys' && method === 'POST') {
-      return handleCreateAgentKey(request, env);
-    }
-    if (path === '/api/admin/agent-keys/reset' && method === 'POST') {
-      return handleResetAgentKey(request, env);
-    }
-    if (path === '/api/admin/agent-keys' && method === 'DELETE') {
-      return handleRevokeAgentKey(request, env);
-    }
-
-    return errorResponse('未找到接口', 404);
+    return route.handler(request, env);
   } catch (e) {
     return errorResponse('服务器错误', 500, e);
   }
+}
+
+// ==================== 路由处理函数 ====================
+
+/**
+ * 文章密码认证（5次/1小时限制）
+ */
+async function handlePostAuth(request, env) {
+  try {
+    const body = await request.json();
+    const { postId, password } = body;
+    if (!postId || !password) return json({ success: false, error: '参数错误' }, 400);
+    if (!Number.isFinite(Number(postId))) return json({ success: false, error: '参数错误' }, 400);
+
+    const clientIP = request.headers.get('CF-Connecting-IP') || 'unknown';
+    const rateKey = 'post_auth_rate_' + clientIP + '_' + postId;
+    if (!await checkRateLimit(env, rateKey, RATE_MAX_5, RATE_WINDOW_1H)) {
+      return json({ success: false, error: '密码错误次数过多，请 1 小时后再试' }, 429);
+    }
+
+    const post = await env.DB.prepare("SELECT password FROM posts WHERE id=? AND status IN ('published','publish')").bind(postId).first();
+    if (!post) return json({ success: false, error: '文章不存在' }, 404);
+    if (await verifyPasswordHash(password, post.password)) {
+      await clearRateLimit(env, rateKey);
+      const cookieValue = await signPostAuthCookie(postId, post.password);
+      const resp = json({ success: true });
+      resp.headers.set('Set-Cookie', buildSessionCookie(postCookieName(postId), cookieValue));
+      return resp;
+    }
+    return json({ success: false, error: '密码错误' }, 401);
+  } catch (e) {
+    return json({ success: false, error: '认证失败' }, 500);
+  }
+}
+
+/**
+ * 全站密码认证（5次/1小时限制）
+ */
+async function handleSiteAuth(request, env) {
+  try {
+    const body = await request.json();
+    const settings = await getSettings(env);
+    if (!settings.site_password) {
+      return json({ success: true, message: '未设置全站密码' });
+    }
+
+    // 速率限制检查（5次/1小时）
+    const clientIP = request.headers.get('CF-Connecting-IP') || 'unknown';
+    const rateKey = 'site_auth_rate_' + clientIP;
+    if (!await checkRateLimit(env, rateKey, RATE_MAX_5, RATE_WINDOW_1H)) {
+      return json({ success: false, error: '密码错误次数过多，请 1 小时后再试' }, 429);
+    }
+
+    // 使用哈希验证密码
+    if (await verifyPasswordHash(body.password, settings.site_password)) {
+      await clearRateLimit(env, rateKey);
+      const cookieValue = await signSiteAuthCookie(settings.site_password);
+      const resp = json({ success: true });
+      resp.headers.set('Set-Cookie', buildSessionCookie(SITE_COOKIE, cookieValue));
+      return resp;
+    }
+    return json({ success: false, error: '密码错误' }, 401);
+  } catch (e) {
+    console.error((e.message || 'Error').substring(0, 100));
+    return json({ success: false, error: '认证失败' }, 500);
+  }
+}
+
+/**
+ * 管理员登录（5次/10分钟限制）
+ */
+async function handleLogin(request, env) {
+  const body = await request.json();
+  if (!env.ADMIN_PASSWORD) {
+    return json({ success: false, error: '未配置管理员密码（ADMIN_PASSWORD），请先在 Cloudflare 后台设置后再登录' }, 503);
+  }
+
+  // 速率限制（5次/10分钟）
+  const clientIP = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const rateKey = 'login_rate_' + clientIP;
+  if (!await checkRateLimit(env, rateKey, RATE_MAX_5, RATE_WINDOW_10M)) {
+    return json({ success: false, error: '登录尝试次数过多，请 10 分钟后再试' }, 429);
+  }
+
+  // 验证账号
+  if (env.ADMIN_USERNAME && body.username !== env.ADMIN_USERNAME) {
+    return json({ success: false, error: '账号错误' }, 401);
+  }
+
+  if (body.password && await verifyPasswordHash(body.password, await getAdminPasswordHash(env))) {
+    await clearRateLimit(env, rateKey);
+    const token = await generateToken(env.ADMIN_PASSWORD);
+    return json({ success: true, token });
+  }
+
+  return json({ success: false, error: '密码错误' }, 401);
+}
+
+/**
+ * 健康检查
+ */
+async function handleHealth(request, env) {
+  try {
+    await env.DB.prepare("SELECT 1").first();
+    return json({ status: 'ok', db: 'connected', timestamp: new Date().toISOString() });
+  } catch (e) {
+    return json({ status: 'error', db: 'disconnected', timestamp: new Date().toISOString() }, 503);
+  }
+}
+
+/**
+ * 文章列表路由：仅首页列表（第 1 页、无分类/标签筛选）走 60 秒缓存
+ */
+function handleGetPostsRoute(request, env) {
+  const url = new URL(request.url);
+  const page = url.searchParams.get('page') || '1';
+  if (page === '1' && !url.searchParams.get('category') && !url.searchParams.get('tag')) {
+    return withCache(request, () => handleGetPosts(request, env), 60, true);
+  }
+  return handleGetPosts(request, env);
 }
 
 // ==================== 公开 API 实现 ====================
@@ -682,7 +637,6 @@ async function handleCreatePost(request, env) {
 
   let coverImage = body.cover_image;
   if (coverImage && coverImage.startsWith('data:')) {
-    const { uploadImage } = await import('./lib/image.js');
     coverImage = await uploadImage(env, coverImage, slug);
   }
 
@@ -720,7 +674,6 @@ async function handleUpdatePost(request, env) {
   if (!body.content || !body.content.trim()) return errorResponse('内容不能为空', 400);
   let coverImage = body.cover_image;
   if (coverImage && coverImage.startsWith('data:')) {
-    const { uploadImage } = await import('./lib/image.js');
     coverImage = await uploadImage(env, coverImage, id);
   }
 

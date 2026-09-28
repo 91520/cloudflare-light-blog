@@ -97,6 +97,18 @@ export function generateRandomFilename() {
 }
 
 /**
+ * 安全的 JSON-LD 序列化（用于内联 <script type="application/ld+json">）
+ * JSON.stringify 不会转义 "<"，站点名或文章标题里的 "</script>" 会提前闭合脚本标签，
+ * 因此必须把 < 与 > 转成 Unicode 转义序列（JSON 解析后仍是原字符，不影响语义）。
+ */
+export function safeJsonLd(obj) {
+  return JSON.stringify(obj)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026');
+}
+
+/**
  * HTML 转义（防 XSS）
  */
 export function escapeHtml(str) {

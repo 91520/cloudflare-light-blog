@@ -1,6 +1,6 @@
 // ==================== 文章详情页（SEO 优化）====================
 
-import { escapeHtml, renderAdContent } from '../lib/utils.js';
+import { escapeHtml, renderAdContent, safeJsonLd } from '../lib/utils.js';
 import { getTheme } from '../themes/index.js';
 import { simpleBaseCSS, simplePostCSS } from '../themes/simple-layout.js';
 
@@ -49,7 +49,7 @@ export function getPostHTML(post, settings, requestUrl) {
   <meta name="twitter:title" content="${escapeHtml(post.title)}">
   <meta name="twitter:description" content="${escapeHtml(postExcerpt)}">
   ${post.cover_image ? `<meta name="twitter:image" content="${escapeHtml(post.cover_image)}">` : ''}
-  <script type="application/ld+json">${JSON.stringify({
+  <script type="application/ld+json">${safeJsonLd({
     "@context": "https://schema.org",
     "@type": "BlogPosting",
     "headline": post.title,

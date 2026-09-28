@@ -3,7 +3,7 @@
 import { hashPassword } from './auth.js';
 
 // 升级数据库结构时递增此值，确保旧实例执行一次迁移。
-const SCHEMA_VERSION = '1';
+const SCHEMA_VERSION = '2';
 
 /**
  * 获取表的列信息（白名单验证防止 SQL 注入）
@@ -143,6 +143,34 @@ export async function initDB(env) {
       console.log('[DB] 创建 agent_logs 表');
     }
 
+    // ========== 3.3 创建 rate_limits 表（限流记录，独立于 settings）==========
+    // 限流是高频写入的临时数据，早期误存在 settings 表里，导致设置数据被污染
+    // 且记录永不过期。此处独立建表并带 expires_at，便于按时间清理。
+    if (!(await tableExists(DB, 'rate_limits'))) {
+      await DB.prepare(`
+        CREATE TABLE rate_limits (
+          key TEXT PRIMARY KEY,
+          attempts TEXT DEFAULT '[]',
+          expires_at INTEGER NOT NULL
+        )
+      `).run();
+      console.log('[DB] 创建 rate_limits 表');
+    }
+
+    // ========== 3.4 清理 settings 表中历史遗留的限流记录 ==========
+    // 旧版本把限流写在 settings 的 *_rate_* 键上，迁移后需要清除。
+    try {
+      const legacy = await DB.prepare(
+        "SELECT COUNT(*) as cnt FROM settings WHERE key LIKE '%_rate_%'"
+      ).first();
+      if (legacy && legacy.cnt > 0) {
+        await DB.prepare("DELETE FROM settings WHERE key LIKE '%_rate_%'").run();
+        console.log(`[DB] 已清理 ${legacy.cnt} 条遗留限流记录`);
+      }
+    } catch (e) {
+      console.warn('[DB] 清理遗留限流记录失败（可忽略）:', e.message || 'Error');
+    }
+
     // ========== 4. 创建索引 ==========
     try {
       await DB.prepare("CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(status)").run();
@@ -280,7 +308,7 @@ async function loadSettings(env, version) {
   try {
     const { results } = await env.DB.prepare("SELECT key, value FROM settings").all();
     if (results) {
-      // 过滤速率限制等内部记录，避免污染设置数据
+      // 过滤内部记录（schema 版本、历史遗留的限流键），避免污染设置数据
       results.forEach(s => {
         if (s.key.includes('_rate_') || s.key === '__schema_version') return;
         defaults[s.key] = s.value || '';
@@ -328,4 +356,47 @@ export async function saveSettings(env, settingsObj) {
   }
   // 保存后清除缓存
   invalidateSettingsCache();
+}
+
+// ==================== 限流记录 ====================
+
+/**
+ * 读取某限流键在窗口内的尝试时间戳数组
+ * @returns {Promise<number[]>} 已过滤掉过期记录的时间戳
+ */
+export async function getRateAttempts(env, key, windowMs) {
+  const now = Date.now();
+  const row = await env.DB.prepare("SELECT attempts FROM rate_limits WHERE key=?").bind(key).first();
+  let attempts = [];
+  if (row) { try { attempts = JSON.parse(row.attempts); } catch (e) { attempts = []; } }
+  if (!Array.isArray(attempts)) attempts = [];
+  return attempts.filter(t => typeof t === 'number' && now - t < windowMs);
+}
+
+/**
+ * 覆盖写入某限流键的记录
+ */
+export async function setRateAttempts(env, key, attempts, expiresAt) {
+  await env.DB.prepare("INSERT OR REPLACE INTO rate_limits (key, attempts, expires_at) VALUES (?, ?, ?)")
+    .bind(key, JSON.stringify(attempts), expiresAt).run();
+}
+
+/**
+ * 清除某限流键
+ */
+export async function clearRateAttempts(env, key) {
+  await env.DB.prepare("DELETE FROM rate_limits WHERE key=?").bind(key).run();
+}
+
+/**
+ * 清理已过期的限流记录（由 scheduled 定时任务调用，避免表无限增长）
+ */
+export async function cleanupRateLimits(env) {
+  try {
+    const r = await env.DB.prepare("DELETE FROM rate_limits WHERE expires_at < ?").bind(Date.now()).run();
+    return r.meta?.changes ?? 0;
+  } catch (e) {
+    console.error('[DB] 清理限流记录失败:', e.message || 'Error');
+    return 0;
+  }
 }

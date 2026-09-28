@@ -4,6 +4,23 @@
 
 ## 更新日志
 
+### v1.4.0 (2026-09-28)
+
+#### 架构重构
+- **API 改为显式路由表**：`handleAPI` 原先由 60 余个 `if` 顺序判断分发，公开接口与需鉴权接口仅靠「代码位置」分隔（鉴权检查写在中间），往中间插入新路由会意外开放未鉴权接口。现改为 `ROUTES` 表，鉴权由 `auth` 字段显式声明，不再依赖顺序
+- **Cookie 签名逻辑去重**：站点访问密码与文章密码的 HMAC 签名原本在 `worker.js`（校验）和 `api.js`（签发）各实现一份，现统一到 `lib/cookie-auth.js`
+- **限流记录迁出 settings 表**：原先把限流写在 `settings` 的 `*_rate_*` 键上，导致设置数据被污染、记录永不过期、读取设置时还要靠字符串匹配过滤。现独立为 `rate_limits` 表（带 `expires_at`），并由每日定时任务清理
+- 移除两处无意义的动态 `import()`（同名依赖已有静态导入）
+
+#### 安全修复
+- **修复 JSON-LD 的 XSS 注入**：首页与文章页把站点名、文章标题直接 `JSON.stringify` 后内联进 `<script type="application/ld+json">`，而 `JSON.stringify` 不转义 `<`，内容中的 `</script>` 会提前闭合标签。新增 `safeJsonLd()` 统一转义 `<` `>` `&`
+
+#### 工程化
+- 新增回归测试 `test/regression.test.js`（36 个用例），覆盖路由与鉴权边界、限流、schema 迁移、Cookie 签名、主题渲染与 XSS 防护，纯 Node 运行无需联网
+- 新增 `npm run check`（全量语法检查）与 `npm test`
+- `.gitignore` 补充 `node_modules/`、`.wrangler/`、`.env*` 等条目
+- 数据库 schema 版本升至 v2（自动清理历史遗留的限流记录）
+
 ### v1.3.1 (2026-09-04)
 
 #### 安全加固
@@ -258,29 +275,71 @@
 
 ```
 src/
-├── worker.js              # 主入口（路由、全站密码验证、robots.txt、favicon.ico）
-├── api.js                 # API 处理（分页、缓存、输入验证、速率限制、密码认证、Cookie 生成）
+├── worker.js              # 主入口（路由分发、全站密码验证、robots.txt、favicon.ico、定时清理）
+├── api.js                 # API 路由表与处理函数（分页、缓存、输入验证、速率限制、密码认证）
 ├── mcp.js                 # MCP Server（Streamable HTTP / JSON-RPC，8 个工具 + 鉴权 + 审计）
 ├── lib/
-│   ├── utils.js           # 工具函数（JSON/HTML 响应、CORS 多域名、HTTP 安全头）
-│   ├── db.js              # 数据库初始化（索引、表名白名单、设置读写）
+│   ├── utils.js           # 工具函数（JSON/HTML 响应、CORS 多域名、HTTP 安全头、JSON-LD 安全序列化）
+│   ├── db.js              # 数据库初始化（建表、索引、schema 迁移、设置读写、限流记录读写）
 │   ├── auth.js            # 认证模块（PBKDF2 密码哈希、HKDF 密钥派生、HMAC-SHA256、恒定时间比较）
+│   ├── cookie-auth.js     # Cookie 签名（站点访问 / 文章密码共用签名与校验）
 │   ├── agent-auth.js      # Agent Key 鉴权（生成、校验、权限判断）
 │   ├── cache.js           # Workers Cache API
 │   └── image.js           # 图片处理（R2 上传/列表、2MB 限制、MIME 验证、文件名校验）
 ├── themes/                # 主题目录（可自行扩展）
-│   ├── index.js           # 主题注册中心
+│   ├── index.js           # 主题注册中心（新增主题只需在此注册）
 │   ├── animal-forest.js   # 动森主题（默认）
 │   ├── ocean-breeze.js    # 蔚蓝主题
-│   └── diy-themes.js      # 自定义主题（用户可修改，建议在此基础上开发）
+│   ├── simple.js          # Simple 主题（NotionNext 风格）
+│   ├── simple-layout.js   # Simple 专属页面样式
+│   └── diy-themes.js      # 自定义主题默认值（可在后台编辑并保存到 D1）
 └── views/
     ├── frontend.js        # 前台首页（SEO、分页、搜索、响应式）
     ├── post.js            # 文章详情页（Markdown、代码高亮、灯箱、SEO、懒加载）
     ├── password.js        # 密码验证页（API 认证、速率限制）
     └── admin.js           # 后台管理页（Vue 3、响应式、SRI）
+test/regression.test.js    # 回归测试（路由/鉴权、限流、迁移、Cookie、主题、渲染）
 public/icon/               # 静态图标资源（随项目部署）
 wrangler.toml              # Cloudflare 配置
 ```
+
+## 开发与测试
+
+```bash
+npm run dev      # 本地开发（wrangler dev）
+npm run check    # 全部源文件语法检查
+npm test         # 回归测试（36 个用例，纯 Node，无需联网或 D1）
+npm run deploy   # 部署
+```
+
+测试用内存 D1 替身驱动真实业务代码，覆盖路由与鉴权边界、限流、schema 迁移、
+Cookie 签名、主题渲染与 XSS 防护。新增接口或主题后请补充对应用例。
+
+## 架构约定
+
+以下约定用于维持当前分层，改动时请遵守：
+
+**1. 依赖方向单向** —— `worker.js/(路由)` → `api.js/(业务)` → `lib/*(能力)` → `views/*(渲染)`。
+`views/` 内不得直接访问 `env.DB`，数据一律由上层取好后传入。
+
+**2. 接口鉴权显式声明** —— 新增接口必须在 `src/api.js` 的 `ROUTES` 表中登记，
+并通过 `auth: true/false` 明确标注是否需要管理员鉴权。
+不再使用「把鉴权检查写在中间、靠代码位置分隔公私接口」的写法。
+
+**3. 主题集中注册** —— 新增主题只需在 `src/themes/index.js` 注册，
+后台选项与前台渲染都从该注册表读取，不要另建一份配色副本。
+
+**4. 敏感与临时数据不写进 settings 表** —— `settings` 仅存站点配置。
+限流记录存 `rate_limits` 表（带 `expires_at`，由定时任务清理）。
+
+**5. 内联 `<script>` 的 JSON 必须转义** —— 用 `safeJsonLd()`（`lib/utils.js`）
+而非裸 `JSON.stringify()`，否则内容中的 `</script>` 会提前闭合标签。
+
+```bash
+# 数据库 schema 变更时递增 db.js 顶部的 SCHEMA_VERSION，
+# 迁移逻辑写在 initDB() 内，且必须可重复执行（幂等）。
+```
+
 
 ### 图标资源说明
 
