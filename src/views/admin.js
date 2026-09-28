@@ -103,6 +103,16 @@ export function getAdminHTML() {
     .tag { display:inline-block; padding:2px 8px; color:var(--accent); background:var(--accent-soft); border-radius:5px; font-size:12px; }
     .status-dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--muted); margin-right:6px; }
     .status-dot.published { background:var(--success); }
+    .list-toolbar { display:flex; align-items:center; gap:10px; margin-bottom:16px; flex-wrap:wrap; }
+    .list-search { width:260px; flex:0 1 260px; }
+    .pagination { display:flex; flex-direction:column; align-items:center; gap:10px; margin-top:16px; }
+    .pagination-info { color:var(--muted); font-size:13px; }
+    .pagination-list { display:flex; align-items:center; justify-content:center; gap:6px; flex-wrap:wrap; }
+    .page-btn { min-width:36px; padding:6px 10px; font-size:13px; background:var(--surface); border:1px solid var(--border); }
+    .page-btn:hover:not(:disabled) { background:var(--accent-soft); border-color:var(--accent); color:var(--accent); filter:none; }
+    .page-btn.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
+    .page-ellipsis { color:var(--muted); padding:0 2px; user-select:none; }
+    .empty-row td { text-align:center; color:var(--muted); padding:34px 16px; }
     .form-group { margin-bottom:18px; }
     .form-group > label { display:block; font-weight:600; margin-bottom:7px; }
     .form-row,.personal-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; align-items:start; }
@@ -243,9 +253,12 @@ export function getAdminHTML() {
           <!-- 文章列表 -->
           <div v-if="!editingId">
           <div class="page-header"><h2>文章管理</h2></div>
-          <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+          <div class="list-toolbar">
             <button class="btn" @click="openAdd()">新建文章</button>
             <button class="btn btn-import" @click="showImportModal=true">导入文章</button>
+            <input class="list-search" v-model="postSearch" @keyup.enter="searchPosts" type="search" maxlength="20" placeholder="搜索标题 / 标签 / 分类" aria-label="搜索文章" enterkeyhint="search">
+            <button class="btn btn-cancel" @click="searchPosts">搜索</button>
+            <button v-if="postSearch || postKeyword" class="btn btn-cancel" @click="clearPostSearch">清空</button>
           </div>
           <div class="w-60"><div class="card table-card">
             <table >
@@ -284,13 +297,22 @@ export function getAdminHTML() {
                     <td class="table-right text-muted">{{post.updated_at ? new Date(post.updated_at).toLocaleDateString('zh-CN') : '-'}}</td>
                   </tr>
                 </template>
+                <tr v-if="!posts.length" class="empty-row"><td colspan="9">{{postKeyword ? '没有匹配「' + postKeyword + '」的文章' : '暂无文章'}}</td></tr>
               </tbody>
             </table>
           </div>
-          <div v-if="Math.ceil(postTotal / postPageSize) > 1" style="display:flex;justify-content:center;gap:8px;margin-top:16px">
-            <button class="btn btn-cancel" @click="loadPosts(postPage-1)" :style="{opacity:postPage<=1?0.4:1}" :disabled="postPage<=1" style="padding:8px 16px;font-size:14px">上一页</button>
-            <span style="display:flex;align-items:center;font-weight:600;font-size:14px">{{postPage}} / {{Math.ceil(postTotal / postPageSize)}}</span>
-            <button class="btn btn-cancel" @click="loadPosts(postPage+1)" :style="{opacity:postPage>=Math.ceil(postTotal/postPageSize)?0.4:1}" :disabled="postPage>=Math.ceil(postTotal/postPageSize)" style="padding:8px 16px;font-size:14px">下一页</button>
+          <div v-if="postTotal > 0" class="pagination">
+            <div class="pagination-info">共 {{postTotal}} 篇 · 第 {{postPage}} / {{postTotalPages}} 页</div>
+            <div v-if="postTotalPages > 1" class="pagination-list">
+              <button class="page-btn" @click="loadPosts(1)" :disabled="postPage<=1">首页</button>
+              <button class="page-btn" @click="loadPosts(postPage-1)" :disabled="postPage<=1">上一页</button>
+              <template v-for="(p, i) in postPageList" :key="i">
+                <span v-if="p === '...'" class="page-ellipsis">…</span>
+                <button v-else class="page-btn" :class="{active: p === postPage}" :aria-current="p === postPage ? 'page' : null" @click="loadPosts(p)">{{p}}</button>
+              </template>
+              <button class="page-btn" @click="loadPosts(postPage+1)" :disabled="postPage>=postTotalPages">下一页</button>
+              <button class="page-btn" @click="loadPosts(postTotalPages)" :disabled="postPage>=postTotalPages">末页</button>
+            </div>
           </div>
           </div>
           </div>
@@ -824,7 +846,7 @@ export function getAdminHTML() {
           finally { loggingIn.value = false; }
         };
         const logout = () => { closeThemePreview(); localStorage.removeItem('token'); logged.value = false; sidebarOpen.value = false; loadedResources.clear(); settingsLoaded.value = false; imagesLoaded.value = false; };
-        const loadPosts = async (page = postPage.value) => { try { const r = await api('/api/admin/posts?page=' + page); posts.value = r.data.data; postTotal.value = r.data.total; categoryCounts.value = r.data.categoryCounts || {}; postPage.value = page; if (page > 1 && !posts.value.length && postTotal.value) await loadPosts(page - 1); } catch (e) { showToast('加载文章失败'); return false; } };
+        const loadPosts = async (page = postPage.value) => { try { const qs = 'page=' + Math.max(1, parseInt(page, 10) || 1) + (postKeyword.value ? '&q=' + encodeURIComponent(postKeyword.value) : ''); const r = await api('/api/admin/posts?' + qs); posts.value = r.data.data || []; postTotal.value = r.data.total || 0; categoryCounts.value = r.data.categoryCounts || {}; postPage.value = r.data.page || 1; if (postPage.value > 1 && !posts.value.length && postTotal.value) await loadPosts(postPage.value - 1); } catch (e) { showToast('加载文章失败'); return false; } };
         const loadCategories = async () => { try { const r = await api('/api/categories'); categories.value = r.data; } catch (e) { showToast('加载分类失败'); return false; } };
         const loadSettings = async () => { try { const r = await api('/api/admin/settings'); const pinnedId = r.data.pinned_post_id || ''; try { const saved = JSON.parse(r.data.diy_theme || '{}'); diyTheme.value = Object.fromEntries(diyFields.map(({ key }) => [key, typeof saved[key] === 'string' ? saved[key] : themes['diy-themes'][key]])); } catch { diyTheme.value = Object.fromEntries(diyFields.map(({ key }) => [key, themes['diy-themes'][key]])); } sitePasswordSet.value = r.data.site_password_set === '1'; settingsForm.value = { site_name: r.data.site_name || '', site_description: r.data.site_description || '', site_bio: r.data.site_bio || '', site_links: r.data.site_links || '', site_author: r.data.site_author || '', site_footer: r.data.site_footer || '', custom_js: r.data.custom_js || '', iconfont_css: r.data.iconfont_css || '', site_theme: r.data.site_theme || 'animal-forest', allow_robots: r.data.allow_robots || '1', enable_compression: r.data.enable_compression || '1', links_title: r.data.links_title || '友链', site_created_at: r.data.site_created_at || '2020-02-02', site_password: '', sitePasswordType: sitePasswordSet.value ? 'has' : '', allowed_origins: r.data.allowed_origins || '*', enable_tag_cloud: r.data.enable_tag_cloud || '1', enable_post_toc: r.data.enable_post_toc || '1', enable_mcp: r.data.enable_mcp || '0', profile_position: r.data.profile_position || 'left', tag_cloud_position: r.data.tag_cloud_position || 'left', pinned_post_id: pinnedId, pinnedType: pinnedId ? 'has' : '', copyright_notice: r.data.copyright_notice || '', ad_content: r.data.ad_content || '', ad_position: r.data.ad_position || 'left' }; currentPinnedId.value = pinnedId; savedTheme.value = settingsForm.value.site_theme; themeDraft.value = savedTheme.value; savedDiyTheme.value = { ...diyTheme.value }; settingsLoaded.value = true; } catch (e) { showToast('加载设置失败'); return false; } };
         const loadTrash = async () => { try { const r = await api('/api/admin/trash'); trashPosts.value = r.data; } catch (e) { showToast('加载回收站失败'); return false; } };
@@ -844,6 +866,21 @@ export function getAdminHTML() {
         const postPage = ref(1);
         const postPageSize = 10;
         const postTotal = ref(0);
+        const postSearch = ref('');
+        const postKeyword = ref('');
+        const postTotalPages = computed(() => Math.max(1, Math.ceil(postTotal.value / postPageSize)));
+        const postPageList = computed(() => {
+          const total = postTotalPages.value;
+          const cur = postPage.value;
+          if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+          const picked = [...new Set([1, 2, cur - 1, cur, cur + 1, total - 1, total])].filter(p => p >= 1 && p <= total).sort((a, b) => a - b);
+          const list = [];
+          let prev = 0;
+          for (const p of picked) { if (p - prev > 1) list.push('...'); list.push(p); prev = p; }
+          return list;
+        });
+        const searchPosts = () => { postKeyword.value = postSearch.value.trim(); loadPosts(1); };
+        const clearPostSearch = () => { postSearch.value = ''; postKeyword.value = ''; loadPosts(1); };
         const openAdd = () => { editingId.value = 'new'; form.value = { title: '', content: '', category: '', tags: '', status: 'published', cover_image: '', password: '', passwordType: '', hadPassword: false, published_at: new Date().toISOString().split('T')[0] }; coverPreview.value = ''; };
         const cancelNewPost = async () => { const { confirmed } = await showConfirm('确认取消', '未保存的内容将丢失'); if (confirmed) { editingId.value = null; } };
         const toggleEdit = async (p) => { if (editingId.value === p.id) { editingId.value = null; return; } try { const r = await api('/api/admin/post?id=' + p.id); const post = r.data; editingId.value = p.id; form.value = { title: post.title, content: post.content, category: post.category, tags: post.tags, status: post.status, cover_image: post.cover_image || '', password: '', passwordType: post.has_password ? 'has' : '', hadPassword: !!post.has_password, published_at: post.published_at ? post.published_at.split('T')[0] : new Date().toISOString().split('T')[0] }; coverPreview.value = post.cover_image || ''; } catch (e) { showToast('加载文章失败'); } };
@@ -1316,7 +1353,7 @@ export function getAdminHTML() {
         watch(editingId, (id) => { if (id) ensureResource('settings', loadSettings).then(loadEmojiOnInit).catch(() => {}); });
         onMounted(() => { check(); document.addEventListener('click', closeAllSelects); colorScheme.addEventListener('change', followSystemColor); });
         onUnmounted(() => { closeThemePreview(); document.removeEventListener('click', closeAllSelects); colorScheme.removeEventListener('change', followSystemColor); });
-        return { navigation, pageTitle, navigate, sidebarOpen, colorMode, toggleColorMode, loggingIn, pageLoading, pageLoadError, loadPage, settingsLoaded, savedTheme, themeDraft, themeSaving, diyDirty, thumbnailStyle, resetThemeDraft, applyBlogTheme, previewOpen, previewLoading, previewError, previewHtml, previewTheme, previewName, previewWidth, previewDialog, openThemePreview, closeThemePreview, logged, username, password, login, logout, posts, categoryCounts, editingId, form, coverPreview, toast, openAdd, cancelNewPost, toggleEdit, handleCoverChange, handleCoverDrop, deleteCover, savePost, deletePost, categories, currentPage, postPage, postPageSize, postTotal, loadPosts, categoryForm, saveCategory, deleteCategory, editCategory, editingCategory, settingsForm, saveSiteSettings, savePersonalSettings, themeOptions, diyFields, diyTheme, sitePasswordSet, trashPosts, restorePost, permanentDelete, confirmModal, showConfirm, insertMd, applyCopyrightTemplate, applyFooterTemplate, customSelects, toggleSelect, selectOption, showImportModal, importFileName, importFileData, importing, importResult, handleImportFile, importPosts, currentPinnedId, iconList, emojiLoading, insertEmoji, images, r2Configured, imagesLoaded, imagesLoadError, imagesCursor, imagesHasMore, showImagePicker, selectedImage, pickUploading, locationOrigin, imageSizes, captureImageSize, loadImages, loadMoreImages, handleImageUpload, openImagePicker, insertPickedImage, copyImageLink, deleteImage, agentKeys, agentKeyForm, mcpAddress, loadAgentKeys, maskKey, copyText, generateAgentKey, resetAgentKey, revokeAgentKey };
+        return { navigation, pageTitle, navigate, sidebarOpen, colorMode, toggleColorMode, loggingIn, pageLoading, pageLoadError, loadPage, settingsLoaded, savedTheme, themeDraft, themeSaving, diyDirty, thumbnailStyle, resetThemeDraft, applyBlogTheme, previewOpen, previewLoading, previewError, previewHtml, previewTheme, previewName, previewWidth, previewDialog, openThemePreview, closeThemePreview, logged, username, password, login, logout, posts, categoryCounts, editingId, form, coverPreview, toast, openAdd, cancelNewPost, toggleEdit, handleCoverChange, handleCoverDrop, deleteCover, savePost, deletePost, categories, currentPage, postPage, postPageSize, postTotal, loadPosts, postSearch, postKeyword, postTotalPages, postPageList, searchPosts, clearPostSearch, categoryForm, saveCategory, deleteCategory, editCategory, editingCategory, settingsForm, saveSiteSettings, savePersonalSettings, themeOptions, diyFields, diyTheme, sitePasswordSet, trashPosts, restorePost, permanentDelete, confirmModal, showConfirm, insertMd, applyCopyrightTemplate, applyFooterTemplate, customSelects, toggleSelect, selectOption, showImportModal, importFileName, importFileData, importing, importResult, handleImportFile, importPosts, currentPinnedId, iconList, emojiLoading, insertEmoji, images, r2Configured, imagesLoaded, imagesLoadError, imagesCursor, imagesHasMore, showImagePicker, selectedImage, pickUploading, locationOrigin, imageSizes, captureImageSize, loadImages, loadMoreImages, handleImageUpload, openImagePicker, insertPickedImage, copyImageLink, deleteImage, agentKeys, agentKeyForm, mcpAddress, loadAgentKeys, maskKey, copyText, generateAgentKey, resetAgentKey, revokeAgentKey };
       }
     }).mount('#app');
     });

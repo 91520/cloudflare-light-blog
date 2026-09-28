@@ -640,17 +640,35 @@ async function handleThemePreview(request, env) {
 }
 
 async function handleAdminGetPosts(request, env) {
-  const page = Math.max(1, parseInt(new URL(request.url).searchParams.get('page'), 10) || 1);
+  const params = new URL(request.url).searchParams;
+  const page = Math.max(1, parseInt(params.get('page'), 10) || 1);
   const limit = 10;
+  // 上限 20：转义后 pattern 最长 42，低于 SQLite 的 LIKE pattern 长度限制（本机 workerd 实测 <50）
+  const keyword = (params.get('q') || '').trim().slice(0, 20);
   const { results: counts } = await env.DB.prepare(
     "SELECT category, COUNT(*) AS total FROM posts WHERE status != 'trash' GROUP BY category"
   ).all();
   const categoryCounts = Object.fromEntries((counts || []).map(row => [row.category, row.total]));
-  const total = (counts || []).reduce((sum, row) => sum + row.total, 0);
-  const { results } = await env.DB.prepare(
-    "SELECT id, title, category, tags, status, created_at, updated_at, published_at FROM posts WHERE status != 'trash' ORDER BY created_at DESC LIMIT ? OFFSET ?"
-  ).bind(limit, (page - 1) * limit).all();
-  return json({ data: results || [], total, categoryCounts });
+  // 关键词同时匹配标题、标签、分类；转义 LIKE 通配符，避免用户输入 % _ 影响匹配
+  const binds = [];
+  let where = "status != 'trash'";
+  if (keyword) {
+    const pattern = '%' + keyword.replace(/[\\%_]/g, ch => '\\' + ch) + '%';
+    where += " AND (title LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR category LIKE ? ESCAPE '\\')";
+    binds.push(pattern, pattern, pattern);
+  }
+  const countStmt = env.DB.prepare('SELECT COUNT(*) AS total FROM posts WHERE ' + where);
+  const countRow = binds.length ? await countStmt.bind(...binds).first() : await countStmt.first();
+  const total = countRow?.total || 0;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const safePage = Math.min(page, totalPages);
+  const listStmt = env.DB.prepare(
+    'SELECT id, title, category, tags, status, created_at, updated_at, published_at FROM posts WHERE ' + where + ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
+  );
+  const { results } = binds.length
+    ? await listStmt.bind(...binds, limit, (safePage - 1) * limit).all()
+    : await listStmt.bind(limit, (safePage - 1) * limit).all();
+  return json({ data: results || [], total, page: safePage, pageSize: limit, categoryCounts });
 }
 
 async function handleAdminGetPost(request, env) {
