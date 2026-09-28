@@ -18,6 +18,7 @@ import { signSiteAuthCookie, verifySiteAuthCookie, signPostAuthCookie, verifyPos
 import { getTheme, validateDiyTheme, themes } from '../src/themes/index.js';
 import { getFrontendHTML } from '../src/views/frontend.js';
 import { getPostHTML } from '../src/views/post.js';
+import { normalizeSlug, postPath } from '../src/lib/utils.js';
 
 // ---------- 内存 D1 替身 ----------
 
@@ -425,7 +426,7 @@ test('迁移：清理 settings 中遗留的限流记录且不动业务设置', a
 test('迁移：schema 版本写入为当前版本，重复执行直接短路', async () => {
   const { DB, state } = createMigrationDB({});
   await initDB({ DB });
-  assert.equal(state.settings.get('__schema_version'), '2', '应写入 schema 版本');
+  assert.equal(state.settings.get('__schema_version'), '3', '应写入 schema 版本');
 
   // 再跑一次：应因版本一致而跳过建表
   state.tables.delete('rate_limits');
@@ -623,4 +624,42 @@ test('渲染：DIY 参数实际注入 CSS 变量', () => {
   const settings = { site_theme: 'diy-themes', diy_theme: JSON.stringify({ btnBg: '#abcdef' }) };
   const html = getFrontendHTML(settings, 'https://blog.test/');
   assert.match(html, /--btn-bg: #abcdef/);
+});
+
+// ==================== 文章别名（slug）规则 ====================
+
+test('别名：规范化规则（转小写、去空白、非法字符与纯数字被拒）', () => {
+  assert.deepEqual(normalizeSlug('  My-Post_01  '), { slug: 'my-post_01' });
+  assert.deepEqual(normalizeSlug(''), { slug: '' });
+  assert.deepEqual(normalizeSlug(null), { slug: '' });
+  assert.deepEqual(normalizeSlug('中文别名'), { error: '别名只能包含小写字母、数字、- 和 _，长度 1-50' });
+  assert.deepEqual(normalizeSlug('has space'), { error: '别名只能包含小写字母、数字、- 和 _，长度 1-50' });
+  assert.deepEqual(normalizeSlug('a'.repeat(51)), { error: '别名只能包含小写字母、数字、- 和 _，长度 1-50' });
+  assert.equal('error' in normalizeSlug('815'), true, '纯数字别名必须被拒绝');
+  assert.equal('slug' in normalizeSlug('a'.repeat(50)), true, '50 字符应放行');
+});
+
+test('别名：只有显式设置过别名的文章才用别名做链接', () => {
+  const withAlias = getPostHTML(
+    { id: 815, slug: 'hello-world', slug_custom: 1, title: 'T', content: 'x', created_at: '2026-01-01' },
+    { site_name: 'S', site_theme: 'animal-forest' },
+    'https://blog.test/post/hello-world'
+  );
+  assert.match(withAlias, /rel="canonical" href="https:\/\/blog\.test\/post\/hello-world"/);
+  assert.equal(withAlias.includes('/post/815'), false, '有别名时不应再出现 ID 链接');
+});
+
+test('别名：历史自动生成的别名不改变链接（避免已有 URL 变更）', () => {
+  for (const slug of ['中文标题', 'hello-world-a1b2c']) {
+    const html = getPostHTML(
+      { id: 815, slug, slug_custom: 0, title: 'T', content: 'x', created_at: '2026-01-01' },
+      { site_name: 'S', site_theme: 'animal-forest' },
+      'https://blog.test/post/815'
+    );
+    assert.match(html, /rel="canonical" href="https:\/\/blog\.test\/post\/815"/, `${slug} 不应被当作规范链接`);
+    assert.equal(html.includes('/post/' + slug), false, `${slug} 不应出现在页面链接里`);
+  }
+  assert.equal(postPath({ id: 815, slug: 'x-y', slug_custom: 0 }), '/post/815');
+  assert.equal(postPath({ id: 815, slug: 'x-y', slug_custom: 1 }), '/post/x-y');
+  assert.equal(postPath({ id: 815, slug: '', slug_custom: 1 }), '/post/815', '别名为空时回落 ID');
 });

@@ -89,6 +89,8 @@ export function getAdminHTML() {
     .btn-danger,.delete,.danger { color:var(--danger); background:var(--danger-soft); border-color:transparent; }
     .btn-danger:hover,.delete:hover,.danger:hover { background:var(--danger-soft); }
     .edit { color:var(--accent); background:var(--accent-soft); border-color:transparent; }
+    .pin { color:var(--warning); background:var(--subtle); border:1px solid var(--border); }
+    .pin.active { color:var(--on-accent); background:var(--warning); border-color:transparent; font-weight:600; }
     .card,.image-card,.theme-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; }
     .card { padding:24px; margin-bottom:18px; }
     .table-card { padding:0; overflow-x:auto; }
@@ -266,6 +268,7 @@ export function getAdminHTML() {
                 <tr >
                   <th style="text-align:center;width:70px;white-space:nowrap">删除</th>
                   <th style="text-align:center;width:70px;white-space:nowrap">编辑</th>
+                  <th style="text-align:center;width:96px;white-space:nowrap">置顶</th>
                   <th style="text-align:center;width:60px">ID</th>
                   <th style="text-align:left">文章标题</th>
                   <th style="text-align:left;width:120px;white-space:nowrap">分类</th>
@@ -280,9 +283,11 @@ export function getAdminHTML() {
                   <tr >
                     <td class="table-center" style="white-space:nowrap"><button class="delete" @click="deletePost(post.id)" style="white-space:nowrap">删除</button></td>
                     <td class="table-center" style="white-space:nowrap"><button class="edit" @click="toggleEdit(post)" style="white-space:nowrap">编辑</button></td>
+                    <td class="table-center" style="white-space:nowrap"><button class="pin" :class="{active: String(currentPinnedId) === String(post.id)}" @click="togglePin(post)" style="white-space:nowrap">{{String(currentPinnedId) === String(post.id) ? '取消置顶' : '置顶'}}</button></td>
                     <td class="table-center text-muted">#{{post.id}}</td>
                     <td class="table-title">
-                      <span v-if="currentPinnedId == post.id" class="tag" style="margin-right:6px" title="已置顶">置顶</span>{{post.title}}
+                      <span v-if="currentPinnedId == post.id" class="tag" style="margin-right:6px" title="已置顶">置顶</span>
+                      <span v-if="post.slug_custom" class="tag" style="margin-right:6px" :title="'别名：/post/' + post.slug">别名</span>{{post.title}}
                     </td>
                     <td class="text-muted" style="white-space:nowrap">{{post.category}}</td>
                     <td >
@@ -297,7 +302,7 @@ export function getAdminHTML() {
                     <td class="table-right text-muted">{{post.updated_at ? new Date(post.updated_at).toLocaleDateString('zh-CN') : '-'}}</td>
                   </tr>
                 </template>
-                <tr v-if="!posts.length" class="empty-row"><td colspan="9">{{postKeyword ? '没有匹配「' + postKeyword + '」的文章' : '暂无文章'}}</td></tr>
+                <tr v-if="!posts.length" class="empty-row"><td colspan="10">{{postKeyword ? '没有匹配「' + postKeyword + '」的文章' : '暂无文章'}}</td></tr>
               </tbody>
             </table>
           </div>
@@ -326,6 +331,15 @@ export function getAdminHTML() {
             <div class="editor-layout">
               <div class="editor-main" style="display:flex;flex-direction:column">
                 <div class="form-group"><label>文章标题</label><input v-model="form.title"></div>
+                <div class="form-group">
+                  <label>文章别名（URL 路径）</label>
+                  <input v-model="form.slug" placeholder="留空 = 不用别名，URL 用 /post/文章ID" maxlength="50" @input="form.slug = form.slug.toLowerCase().replace(/[^a-z0-9_-]/g, '')">
+                  <div class="field-help">
+                    访问地址：<span class="inline-code">{{locationOrigin}}/post/{{form.slug || (editingId === 'new' ? '文章ID' : editingId)}}</span><br>
+                    填写后该文章的链接变为 /post/别名，原 /post/文章ID 会 301 跳到别名；留空则一直用 /post/文章ID（列表里会标出已有别名的文章）。<br>
+                    仅小写字母、数字、- 和 _，长度 1-50，不能是纯数字；别名重复会保存失败。
+                  </div>
+                </div>
                 <div class="form-group" style="flex:1;display:flex;flex-direction:column">
                   <label>文章内容</label>
                   <div class="toolbar">
@@ -769,7 +783,7 @@ export function getAdminHTML() {
         const posts = ref([]);
         const categoryCounts = ref({});
         const editingId = ref(null);
-        const form = ref({ title: '', content: '', category: '', tags: '', status: 'published', cover_image: '', password: '', passwordType: '', hadPassword: false, published_at: new Date().toISOString().split('T')[0] });
+        const form = ref({ title: '', slug: '', content: '', category: '', tags: '', status: 'published', cover_image: '', password: '', passwordType: '', hadPassword: false, published_at: new Date().toISOString().split('T')[0] });
         const coverPreview = ref('');
         const toast = ref('');
         const categories = ref([]);
@@ -881,10 +895,11 @@ export function getAdminHTML() {
         });
         const searchPosts = () => { postKeyword.value = postSearch.value.trim(); loadPosts(1); };
         const clearPostSearch = () => { postSearch.value = ''; postKeyword.value = ''; loadPosts(1); };
-        const openAdd = () => { editingId.value = 'new'; form.value = { title: '', content: '', category: '', tags: '', status: 'published', cover_image: '', password: '', passwordType: '', hadPassword: false, published_at: new Date().toISOString().split('T')[0] }; coverPreview.value = ''; };
+        const openAdd = () => { editingId.value = 'new'; form.value = { title: '', slug: '', content: '', category: '', tags: '', status: 'published', cover_image: '', password: '', passwordType: '', hadPassword: false, published_at: new Date().toISOString().split('T')[0] }; coverPreview.value = ''; };
         const cancelNewPost = async () => { const { confirmed } = await showConfirm('确认取消', '未保存的内容将丢失'); if (confirmed) { editingId.value = null; } };
-        const toggleEdit = async (p) => { if (editingId.value === p.id) { editingId.value = null; return; } try { const r = await api('/api/admin/post?id=' + p.id); const post = r.data; editingId.value = p.id; form.value = { title: post.title, content: post.content, category: post.category, tags: post.tags, status: post.status, cover_image: post.cover_image || '', password: '', passwordType: post.has_password ? 'has' : '', hadPassword: !!post.has_password, published_at: post.published_at ? post.published_at.split('T')[0] : new Date().toISOString().split('T')[0] }; coverPreview.value = post.cover_image || ''; } catch (e) { showToast('加载文章失败'); } };
-        const savePost = async () => { if (form.value.passwordType === 'has' && !form.value.password && !form.value.hadPassword) { alert('请输入文章密码'); return; } const { confirmed } = await showConfirm('确认保存', '确定保存？'); if (!confirmed) return; try { const postData = { ...form.value }; if (postData.passwordType !== 'has') { postData.password = ''; } else if (!postData.password) { delete postData.password; } delete postData.passwordType; delete postData.hadPassword; if (editingId.value === 'new') { await api('/api/admin/post', { method: 'POST', data: postData }); } else { await api('/api/admin/post?id=' + editingId.value, { method: 'PUT', data: postData }); } editingId.value = null; loadPosts(); showToast('保存成功'); } catch (e) { alert('保存失败'); } };
+        const toggleEdit = async (p) => { if (editingId.value === p.id) { editingId.value = null; return; } try { const r = await api('/api/admin/post?id=' + p.id); const post = r.data; editingId.value = p.id; form.value = { title: post.title, slug: post.slug_custom ? (post.slug || '') : '', content: post.content, category: post.category, tags: post.tags, status: post.status, cover_image: post.cover_image || '', password: '', passwordType: post.has_password ? 'has' : '', hadPassword: !!post.has_password, published_at: post.published_at ? post.published_at.split('T')[0] : new Date().toISOString().split('T')[0] }; coverPreview.value = post.cover_image || ''; } catch (e) { showToast('加载文章失败'); } };
+        const savePost = async () => { if (form.value.passwordType === 'has' && !form.value.password && !form.value.hadPassword) { alert('请输入文章密码'); return; } const slugValue = (form.value.slug || '').trim(); if (slugValue && !/^[a-z0-9_-]{1,50}$/.test(slugValue)) { alert('别名只能包含小写字母、数字、- 和 _，长度 1-50'); return; } if (slugValue && /^\d+$/.test(slugValue)) { alert('别名不能是纯数字，会与文章 ID 冲突'); return; } const { confirmed } = await showConfirm('确认保存', '确定保存？'); if (!confirmed) return; try { const postData = { ...form.value }; if (postData.passwordType !== 'has') { postData.password = ''; } else if (!postData.password) { delete postData.password; } delete postData.passwordType; delete postData.hadPassword; if (editingId.value === 'new') { await api('/api/admin/post', { method: 'POST', data: postData }); } else { await api('/api/admin/post?id=' + editingId.value, { method: 'PUT', data: postData }); } editingId.value = null; loadPosts(); showToast('保存成功'); } catch (e) { alert((e.response && e.response.data && e.response.data.error) ? e.response.data.error : '保存失败'); } };
+        const togglePin = async (p) => { const isPinned = String(currentPinnedId.value) === String(p.id); try { const r = await api('/api/admin/post/pin', { method: 'POST', data: { id: isPinned ? '' : p.id } }); currentPinnedId.value = r.data.pinned_post_id || ''; settingsForm.value.pinned_post_id = currentPinnedId.value; settingsForm.value.pinnedType = currentPinnedId.value ? 'has' : ''; showToast(isPinned ? '已取消置顶' : '已置顶'); } catch (e) { showToast(isPinned ? '取消置顶失败' : '置顶失败'); } };
         const deletePost = async (id) => { const { confirmed } = await showConfirm('确认删除', '移到回收站？'); if (!confirmed) return; try { await api('/api/admin/post?id=' + id, { method: 'DELETE' }); loadPosts(); loadedResources.delete('trash'); showToast('已移到回收站'); } catch (e) { showToast('删除失败'); } };
         const editCategory = (c) => { editingCategory.value = c.id; categoryForm.value = { name: c.name, slug: c.slug, description: c.description || '' }; };
         const saveCategory = async () => { if (!categoryForm.value.name || !categoryForm.value.slug) { alert('请填写'); return; } const { confirmed } = await showConfirm('确认保存', '确定？'); if (!confirmed) return; try { const d = { ...categoryForm.value }; if (editingCategory.value && editingCategory.value !== 'new') d.id = editingCategory.value; await api('/api/category', { method: 'POST', data: d }); loadCategories(); editingCategory.value = null; categoryForm.value = { name: '', slug: '', description: '' }; showToast('保存成功'); } catch (e) { alert('保存失败'); } };
@@ -1353,7 +1368,7 @@ export function getAdminHTML() {
         watch(editingId, (id) => { if (id) ensureResource('settings', loadSettings).then(loadEmojiOnInit).catch(() => {}); });
         onMounted(() => { check(); document.addEventListener('click', closeAllSelects); colorScheme.addEventListener('change', followSystemColor); });
         onUnmounted(() => { closeThemePreview(); document.removeEventListener('click', closeAllSelects); colorScheme.removeEventListener('change', followSystemColor); });
-        return { navigation, pageTitle, navigate, sidebarOpen, colorMode, toggleColorMode, loggingIn, pageLoading, pageLoadError, loadPage, settingsLoaded, savedTheme, themeDraft, themeSaving, diyDirty, thumbnailStyle, resetThemeDraft, applyBlogTheme, previewOpen, previewLoading, previewError, previewHtml, previewTheme, previewName, previewWidth, previewDialog, openThemePreview, closeThemePreview, logged, username, password, login, logout, posts, categoryCounts, editingId, form, coverPreview, toast, openAdd, cancelNewPost, toggleEdit, handleCoverChange, handleCoverDrop, deleteCover, savePost, deletePost, categories, currentPage, postPage, postPageSize, postTotal, loadPosts, postSearch, postKeyword, postTotalPages, postPageList, searchPosts, clearPostSearch, categoryForm, saveCategory, deleteCategory, editCategory, editingCategory, settingsForm, saveSiteSettings, savePersonalSettings, themeOptions, diyFields, diyTheme, sitePasswordSet, trashPosts, restorePost, permanentDelete, confirmModal, showConfirm, insertMd, applyCopyrightTemplate, applyFooterTemplate, customSelects, toggleSelect, selectOption, showImportModal, importFileName, importFileData, importing, importResult, handleImportFile, importPosts, currentPinnedId, iconList, emojiLoading, insertEmoji, images, r2Configured, imagesLoaded, imagesLoadError, imagesCursor, imagesHasMore, showImagePicker, selectedImage, pickUploading, locationOrigin, imageSizes, captureImageSize, loadImages, loadMoreImages, handleImageUpload, openImagePicker, insertPickedImage, copyImageLink, deleteImage, agentKeys, agentKeyForm, mcpAddress, loadAgentKeys, maskKey, copyText, generateAgentKey, resetAgentKey, revokeAgentKey };
+        return { navigation, pageTitle, navigate, sidebarOpen, colorMode, toggleColorMode, loggingIn, pageLoading, pageLoadError, loadPage, settingsLoaded, savedTheme, themeDraft, themeSaving, diyDirty, thumbnailStyle, resetThemeDraft, applyBlogTheme, previewOpen, previewLoading, previewError, previewHtml, previewTheme, previewName, previewWidth, previewDialog, openThemePreview, closeThemePreview, logged, username, password, login, logout, posts, categoryCounts, editingId, form, coverPreview, toast, openAdd, cancelNewPost, toggleEdit, handleCoverChange, handleCoverDrop, deleteCover, savePost, deletePost, togglePin, categories, currentPage, postPage, postPageSize, postTotal, loadPosts, postSearch, postKeyword, postTotalPages, postPageList, searchPosts, clearPostSearch, categoryForm, saveCategory, deleteCategory, editCategory, editingCategory, settingsForm, saveSiteSettings, savePersonalSettings, themeOptions, diyFields, diyTheme, sitePasswordSet, trashPosts, restorePost, permanentDelete, confirmModal, showConfirm, insertMd, applyCopyrightTemplate, applyFooterTemplate, customSelects, toggleSelect, selectOption, showImportModal, importFileName, importFileData, importing, importResult, handleImportFile, importPosts, currentPinnedId, iconList, emojiLoading, insertEmoji, images, r2Configured, imagesLoaded, imagesLoadError, imagesCursor, imagesHasMore, showImagePicker, selectedImage, pickUploading, locationOrigin, imageSizes, captureImageSize, loadImages, loadMoreImages, handleImageUpload, openImagePicker, insertPickedImage, copyImageLink, deleteImage, agentKeys, agentKeyForm, mcpAddress, loadAgentKeys, maskKey, copyText, generateAgentKey, resetAgentKey, revokeAgentKey };
       }
     }).mount('#app');
     });

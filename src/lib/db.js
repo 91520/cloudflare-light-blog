@@ -3,7 +3,7 @@
 import { hashPassword } from './auth.js';
 
 // 升级数据库结构时递增此值，确保旧实例执行一次迁移。
-const SCHEMA_VERSION = '2';
+const SCHEMA_VERSION = '3';
 
 /**
  * 获取表的列信息（白名单验证防止 SQL 注入）
@@ -67,6 +67,7 @@ export async function initDB(env) {
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           title TEXT NOT NULL,
           slug TEXT UNIQUE NOT NULL,
+          slug_custom INTEGER DEFAULT 0,
           content TEXT NOT NULL,
           excerpt TEXT DEFAULT '',
           password TEXT DEFAULT '',
@@ -89,6 +90,11 @@ export async function initDB(env) {
       if (!columns.includes('published_at')) {
         await DB.prepare("ALTER TABLE posts ADD COLUMN published_at TEXT").run();
         console.log('[DB] 已添加 published_at 列');
+      }
+      // slug_custom：标记「用户显式设置过别名」，决定前台链接是否使用别名
+      if (!columns.includes('slug_custom')) {
+        await DB.prepare("ALTER TABLE posts ADD COLUMN slug_custom INTEGER DEFAULT 0").run();
+        console.log('[DB] 已添加 slug_custom 列');
       }
       // 移除已废弃的 view_count 列（v1.3.0 起不再统计浏览量；失败可忽略）
       if (columns.includes('view_count')) {

@@ -54,6 +54,33 @@ export function generateSlug(title) {
 }
 
 /**
+ * 文章别名（URL 路径段）允许的字符：小写字母、数字、- 和 _
+ */
+export const SLUG_PATTERN = /^[a-z0-9_-]{1,50}$/;
+
+/**
+ * 规范化并校验用户填写的文章别名。
+ * 规则：去空白 + 转小写；仅允许小写字母/数字/-/_，长度 1-50；禁止纯数字（会与文章 ID 撞路由）。
+ * @returns {{slug: string} | {error: string}} slug 为空串表示未填写
+ */
+export function normalizeSlug(input) {
+  const slug = String(input == null ? '' : input).trim().toLowerCase();
+  if (!slug) return { slug: '' };
+  if (!SLUG_PATTERN.test(slug)) return { error: '别名只能包含小写字母、数字、- 和 _，长度 1-50' };
+  if (/^\d+$/.test(slug)) return { error: '别名不能是纯数字，会与文章 ID 冲突' };
+  return { slug };
+}
+
+/**
+ * 文章前台链接路径。
+ * 只有「显式设置过别名」的文章（slug_custom=1）才用别名做 URL，
+ * 其余保持 /post/:id —— 避免历史自动生成的别名（含中文/随机后缀）导致已有链接大面积变更。
+ */
+export function postPath(post) {
+  return '/post/' + (post && post.slug_custom && post.slug ? post.slug : post.id);
+}
+
+/**
  * 生成干净的文章摘要（去除 Markdown / HTML 符号，截断到指定长度）
  * 保存文章时调用，避免前端每次渲染重复解析
  */

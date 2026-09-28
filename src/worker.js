@@ -1,7 +1,7 @@
 // ==================== Cloudflare Light Blog - 主入口 ====================
 // 模块化架构 | HMAC 认证 | 分页 | 缓存 | SEO
 
-import { html, json, errorResponse, handleOptions, getCorsHeaders, escapeHtml } from './lib/utils.js';
+import { html, json, errorResponse, handleOptions, getCorsHeaders, escapeHtml, postPath } from './lib/utils.js';
 import { initDB, getSettings, cleanupRateLimits } from './lib/db.js';
 import { authenticateRequest, verifyPasswordHash } from './lib/auth.js';
 import { handleImage } from './lib/image.js';
@@ -270,12 +270,12 @@ async function handleIcon(request, env, path) {
 
 /**
  * 文章详情页（带缓存）
- * 兼容旧版日期式链接：/post/202607/1、/post/2026/07/1 等（末段为文章 ID），
- * 统一 301 跳转到规范链接 /post/:id，避免重复收录
+ * 链接末段可以是文章别名（slug）或数字 ID；兼容旧版日期式链接 /post/202607/1。
+ * 统一 301 跳转到规范链接：有别名用别名，否则用 ID，避免重复收录。
  */
 async function handlePostPage(request, env, path, ctx) {
-  // 支持 /post/123、/post/202607/1、/post/2026/07/1（任意段数，末段为数字 ID）
-  const match = path.match(/^\/post\/(?:[^/]+\/)*(\d+)\/?$/);
+  // 支持 /post/123、/post/my-slug、/post/202607/1（任意段数，末段为别名或 ID）
+  const match = path.match(/^\/post\/(?:[^/]+\/)*([^/]+)\/?$/);
   if (!match) {
     // 404 明确禁止缓存：防止 CDN/浏览器把旧的错误页缓存，导致修复后仍打不开
     const notFound = html('无效的文章链接', 404);
@@ -283,12 +283,29 @@ async function handlePostPage(request, env, path, ctx) {
     return notFound;
   }
 
-  const id = parseInt(match[1]);
-  const url = new URL(request.url);
-  const canonical = '/post/' + id;
+  let ref;
+  try { ref = decodeURIComponent(match[1]); } catch { ref = match[1]; }
 
-  // 非规范链接（旧日期格式/多余路径段）→ 301 到规范链接，并保留查询参数
-  if (path !== canonical && path !== canonical + '/') {
+  // 末段纯数字按 ID 查，否则按别名查；只认前台可见状态，避免泄露草稿
+  const post = /^\d+$/.test(ref)
+    ? await env.DB.prepare("SELECT id, slug, slug_custom FROM posts WHERE id=? AND status IN ('published','publish')").bind(parseInt(ref, 10)).first()
+    : await env.DB.prepare("SELECT id, slug, slug_custom FROM posts WHERE slug=? AND status IN ('published','publish')").bind(ref).first();
+
+  if (!post) {
+    const notFound = html('文章不存在', 404);
+    notFound.headers.set('Cache-Control', 'no-store');
+    return notFound;
+  }
+
+  const id = post.id;
+  const url = new URL(request.url);
+  const canonical = postPath(post);
+
+  // 非规范链接（别名/ID 混用、旧日期格式、多余路径段）→ 301 到规范链接，并保留查询参数。
+  // 比较用解码后的路径：请求里的中文别名是百分号编码的，直接和规范路径比较会导致 301 死循环。
+  let decodedPath = path;
+  try { decodedPath = decodeURIComponent(path); } catch { /* 非法编码，保持原样 */ }
+  if (decodedPath !== canonical && decodedPath !== canonical + '/') {
     const target = new URL(canonical, request.url);
     url.searchParams.forEach((v, k) => target.searchParams.set(k, v));
     return Response.redirect(target.toString(), 301);

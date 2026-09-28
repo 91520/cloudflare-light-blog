@@ -403,16 +403,17 @@ export function getFrontendHTML(settings, requestUrl, { preview = false } = {}) 
           }).join('') : '';
           var excerpt = post.has_password ? '🔒 该文章受到密码保护' : escHtml(post.excerpt || '');
           var pinBadge = isPinned ? '<img src="/icon/pin-post.png" style="position:absolute;top:12px;right:12px;width:28px;height:28px;z-index:1">' : '';
+          var postUrl = '/post/' + ((post.slug_custom && post.slug) ? post.slug : post.id);
           return '<article class="post-card" style="position:relative' + (isPinned ? ';border:2px solid #ffd700;box-shadow:0 4px 16px rgba(255,215,0,0.3)' : '') + '">' +
             '<div class="post-cover">' + cover + '</div>' +
             pinBadge +
             '<div class="post-content">' +
-              '<h2><a href="/post/' + post.id + '">' + escHtml(post.title) + '</a></h2>' +
+              '<h2><a href="' + postUrl + '">' + escHtml(post.title) + '</a></h2>' +
               '<p style="color:' + themeColors.textBody + ';font-size:0.9em;line-height:1.7;margin:8px 0">' + excerpt + '</p>' +
               (tags ? '<div style="margin:8px 0 0">' + tags + '</div>' : '') +
               '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">' +
                 '<div class="meta"><span><img src="/icon/category.png" style="width:16px;height:16px;vertical-align:middle;margin-right:4px">' + escHtml(post.category) + '</span><span>' + (function(d){return d.getFullYear()+'年'+(d.getMonth()+1)+'月'+d.getDate()+'日'})(new Date(post.published_at || post.created_at)) + '</span></div>' +
-                '<a class="read-more" href="/post/' + post.id + '">阅读更多</a>' +
+                '<a class="read-more" href="' + postUrl + '">阅读更多</a>' +
               '</div>' +
             '</div>' +
           '</article>';

@@ -1,6 +1,6 @@
 // ==================== 文章详情页（SEO 优化）====================
 
-import { escapeHtml, renderAdContent, safeJsonLd } from '../lib/utils.js';
+import { escapeHtml, renderAdContent, safeJsonLd, postPath } from '../lib/utils.js';
 import { getTheme } from '../themes/index.js';
 import { simpleBaseCSS, simplePostCSS } from '../themes/simple-layout.js';
 
@@ -35,8 +35,8 @@ export function getPostHTML(post, settings, requestUrl) {
   <link rel="icon" href="/icon/favicon.ico">
   <!-- Open Graph -->
   <meta property="og:type" content="article">
-  <meta property="og:url" content="${new URL('/post/' + post.id, requestUrl).href}">
-  <link rel="canonical" href="${new URL('/post/' + post.id, requestUrl).href}">
+  <meta property="og:url" content="${new URL(postPath(post), requestUrl).href}">
+  <link rel="canonical" href="${new URL(postPath(post), requestUrl).href}">
   <meta property="og:title" content="${escapeHtml(post.title)}">
   <meta property="og:description" content="${escapeHtml(postExcerpt)}">
   <meta property="og:site_name" content="${escapeHtml(siteName)}">
@@ -638,7 +638,7 @@ export function getPostHTML(post, settings, requestUrl) {
           var cover = p.cover_image ? '<img class="related-card-cover" src="' + escHtml(p.cover_image) + '" alt="' + escHtml(p.title) + '" loading="lazy" width="300" height="140">' : '<div class="related-card-cover" style="display:flex;align-items:center;justify-content:center;color:${currentTheme.textSecondary};font-size:2em">📄</div>';
           var date = new Date(p.published_at || p.created_at);
           var dateStr = date.getFullYear() + '-' + String(date.getMonth()+1).padStart(2,'0') + '-' + String(date.getDate()).padStart(2,'0');
-          html += '<div class="related-card">' + cover + '<div class="related-card-content"><div class="related-card-title"><a href="/post/' + p.id + '">' + escHtml(p.title) + '</a></div><div class="related-card-meta">' + escHtml(p.category) + ' · ' + dateStr + '</div></div></div>';
+          html += '<div class="related-card">' + cover + '<div class="related-card-content"><div class="related-card-title"><a href="/post/' + ((p.slug_custom && p.slug) ? p.slug : p.id) + '">' + escHtml(p.title) + '</a></div><div class="related-card-meta">' + escHtml(p.category) + ' · ' + dateStr + '</div></div></div>';
         });
         html += '</div>';
         container.innerHTML = html;

@@ -1,6 +1,6 @@
 // ==================== API 处理模块（分页 + 错误处理）====================
 
-import { json, errorResponse, generateSlug, generateExcerpt, escapeHtml } from './lib/utils.js';
+import { json, errorResponse, generateSlug, generateExcerpt, escapeHtml, normalizeSlug, postPath } from './lib/utils.js';
 import { generateToken, authenticateRequest, hashPassword, verifyPasswordHash } from './lib/auth.js';
 import { getSettings, saveSettings, getRateAttempts, setRateAttempts, clearRateAttempts } from './lib/db.js';
 import { themes, validateDiyTheme } from './themes/index.js';
@@ -112,6 +112,7 @@ const ROUTES = [
   { method: 'GET',    path: '/api/admin/settings',        auth: true,  handler: (req, env) => handleAdminGetSettings(env) },
   { method: 'POST',   path: '/api/admin/theme-preview',   auth: true,  handler: handleThemePreview },
   { method: 'POST',   path: '/api/admin/post',            auth: true,  handler: handleCreatePost },
+  { method: 'POST',   path: '/api/admin/post/pin',        auth: true,  handler: handlePinPost },
   { method: 'PUT',    path: '/api/admin/post',            auth: true,  handler: handleUpdatePost },
   { method: 'DELETE', path: '/api/admin/post',            auth: true,  handler: handleDeletePost },
   { method: 'GET',    path: '/api/admin/trash',           auth: true,  handler: (req, env) => handleGetTrash(env) },
@@ -310,28 +311,36 @@ async function handleGetPosts(request, env) {
     params.push(catName);
   }
 
+  // 置顶文章 ID（仅在不按分类筛选时参与排序：置顶文章可能不属于当前分类）
+  const pinnedSetting = await env.DB.prepare(
+    "SELECT value FROM settings WHERE key='pinned_post_id'"
+  ).first();
+  const pinned_post_id = pinnedSetting?.value || '';
+  const pinnedId = (!category && /^\d+$/.test(pinned_post_id)) ? parseInt(pinned_post_id, 10) : 0;
+
   // 获取总数
   const countResult = await env.DB.prepare(
     `SELECT COUNT(*) as total FROM posts ${where}`
   ).bind(...params).first();
   const total = countResult?.total || 0;
 
+  // 排序：置顶优先，其余按发布时间倒序。
+  // 排序键贯穿所有分页（含置顶文章本身占用的名额），避免置顶文章在第 1 页与后续页重复出现。
+  const orderBy = pinnedId
+    ? 'ORDER BY CASE WHEN id=? THEN 0 ELSE 1 END, published_at DESC'
+    : 'ORDER BY published_at DESC';
+  const listParams = pinnedId ? [...params, pinnedId, limit, offset] : [...params, limit, offset];
+
   // 获取分页数据（密码哈希不对外返回，受保护文章的摘要也不对外泄露）
   const { results } = await env.DB.prepare(
-    `SELECT id, title, slug, excerpt, cover_image, category, tags, created_at, published_at, password FROM posts ${where} ORDER BY published_at DESC LIMIT ? OFFSET ?`
-  ).bind(...params, limit, offset).all();
+    `SELECT id, title, slug, slug_custom, excerpt, cover_image, category, tags, created_at, published_at, password FROM posts ${where} ${orderBy} LIMIT ? OFFSET ?`
+  ).bind(...listParams).all();
   const data = (results || []).map(p => {
     const { password, ...rest } = p;
     if (password) rest.excerpt = '';
     rest.has_password = password ? 1 : 0;
     return rest;
   });
-
-  // 获取置顶文章 ID
-  const pinnedSetting = await env.DB.prepare(
-    "SELECT value FROM settings WHERE key='pinned_post_id'"
-  ).first();
-  const pinned_post_id = pinnedSetting?.value || '';
 
   const resp = json({
     data,
@@ -491,7 +500,7 @@ async function handleGetRelatedPosts(request, env) {
   try {
     // 受密码保护的文章不参与相关推荐，且不选 excerpt 避免内容泄露
     const { results } = await env.DB.prepare(
-      `SELECT id, title, cover_image, category, tags, created_at
+      `SELECT id, title, slug, slug_custom, cover_image, category, tags, created_at
        FROM posts
        WHERE status IN ('published','publish') AND id != ? AND (password IS NULL OR password='') AND (${conditions})
        ORDER BY RANDOM()
@@ -524,14 +533,14 @@ async function handleSitemap(request, env) {
   const baseUrl = `${url.protocol}//${url.host}`;
 
   const [postsResult, categoriesResult] = await Promise.all([
-    env.DB.prepare("SELECT id, created_at, published_at, updated_at FROM posts WHERE status IN ('published','publish') ORDER BY updated_at DESC").all(),
+    env.DB.prepare("SELECT id, slug, slug_custom, created_at, published_at, updated_at FROM posts WHERE status IN ('published','publish') ORDER BY updated_at DESC").all(),
     env.DB.prepare("SELECT slug, name FROM categories").all()
   ]);
 
   // 文章页
   const postUrls = (postsResult.results || []).map(p => {
     return `  <url>
-    <loc>${baseUrl}/post/${p.id}</loc>
+    <loc>${baseUrl}${postPath(p)}</loc>
     <lastmod>${p.updated_at}</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>
@@ -574,11 +583,11 @@ async function handleRSS(request, env) {
   const siteDesc = settings.site_description || '';
 
   const { results } = await env.DB.prepare(
-    "SELECT id, title, excerpt, content, created_at, published_at, updated_at, cover_image FROM posts WHERE status IN ('published','publish') ORDER BY published_at DESC LIMIT 20"
+    "SELECT id, title, slug, slug_custom, excerpt, content, created_at, published_at, updated_at, cover_image FROM posts WHERE status IN ('published','publish') ORDER BY published_at DESC LIMIT 20"
   ).all();
 
   const items = (results || []).map(p => {
-    const link = `${baseUrl}/post/${p.id}`;
+    const link = `${baseUrl}${postPath(p)}`;
     const desc = p.excerpt || generateExcerpt(p.content, 200);
     return `  <item>
     <title>${escapeHtml(p.title)}</title>
@@ -663,7 +672,7 @@ async function handleAdminGetPosts(request, env) {
   const totalPages = Math.max(1, Math.ceil(total / limit));
   const safePage = Math.min(page, totalPages);
   const listStmt = env.DB.prepare(
-    'SELECT id, title, category, tags, status, created_at, updated_at, published_at FROM posts WHERE ' + where + ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
+    'SELECT id, title, slug, slug_custom, category, tags, status, created_at, updated_at, published_at FROM posts WHERE ' + where + ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
   );
   const { results } = binds.length
     ? await listStmt.bind(...binds, limit, (safePage - 1) * limit).all()
@@ -680,11 +689,40 @@ async function handleAdminGetPost(request, env) {
   return json({ ...data, has_password: password ? 1 : 0 });
 }
 
+/**
+ * 校验文章别名的格式与唯一性。仅用于**用户显式填写**的别名。
+ * @param {number} [excludeId] 更新时排除文章自身
+ * @returns {Promise<{slug: string} | {error: string}>}
+ */
+async function resolvePostSlug(env, input, excludeId) {
+  const { slug, error } = normalizeSlug(input);
+  if (error) return { error };
+  if (!slug) return { slug: '' };
+  const row = excludeId
+    ? await env.DB.prepare('SELECT id FROM posts WHERE slug=? AND id<>?').bind(slug, excludeId).first()
+    : await env.DB.prepare('SELECT id FROM posts WHERE slug=?').bind(slug).first();
+  if (row) return { error: '别名 ' + slug + ' 已被占用，请换一个' };
+  return { slug };
+}
+
 async function handleCreatePost(request, env) {
   const body = await request.json();
   if (!body.title || !body.title.trim()) return errorResponse('标题不能为空', 400);
   if (!body.content || !body.content.trim()) return errorResponse('内容不能为空', 400);
-  const slug = body.slug || generateSlug(body.title);
+
+  // 别名：显式填写走校验（纯 ASCII + 唯一）；留空则沿用按标题生成的历史行为
+  const explicitSlug = body.slug !== undefined && String(body.slug).trim() !== '';
+  let slug;
+  if (explicitSlug) {
+    const { slug: resolved, error: slugError } = await resolvePostSlug(env, body.slug);
+    if (slugError) return json({ error: slugError }, 400);
+    slug = resolved;
+  } else {
+    slug = generateSlug(body.title);
+    if (!slug) return json({ error: '无法从标题生成别名，请手动填写别名' }, 400);
+    const taken = await env.DB.prepare('SELECT id FROM posts WHERE slug=?').bind(slug).first();
+    if (taken) slug = slug + '-' + Math.random().toString(36).substring(2, 7);
+  }
 
   let coverImage = body.cover_image;
   if (coverImage && coverImage.startsWith('data:')) {
@@ -695,11 +733,12 @@ async function handleCreatePost(request, env) {
   const published_at = body.published_at ? new Date(body.published_at).toISOString() : now;
 
   const result = await env.DB.prepare(`
-    INSERT INTO posts (title, slug, content, excerpt, cover_image, category, tags, status, password, created_at, updated_at, published_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO posts (title, slug, slug_custom, content, excerpt, cover_image, category, tags, status, password, created_at, updated_at, published_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     body.title,
     slug,
+    explicitSlug ? 1 : 0,
     body.content,
     body.excerpt || generateExcerpt(body.content, 200),
     coverImage || '',
@@ -730,6 +769,22 @@ async function handleUpdatePost(request, env) {
 
   const now = new Date().toISOString();
   const published_at = body.published_at ? new Date(body.published_at).toISOString() : now;
+
+  // 别名：只在提交的别名与当前生效别名不同时才校验并更新。
+  // 提交空值 = 该文章改回 /post/文章ID（保留内部 slug 值，避免破坏唯一性约束与历史数据）。
+  if (body.slug !== undefined) {
+    const current = await env.DB.prepare('SELECT slug, slug_custom FROM posts WHERE id=?').bind(id).first();
+    const incoming = String(body.slug).trim().toLowerCase();
+    if (!incoming) {
+      if (current?.slug_custom) {
+        await env.DB.prepare('UPDATE posts SET slug_custom=0 WHERE id=?').bind(id).run();
+      }
+    } else if (!(current?.slug_custom && incoming === current.slug.toLowerCase())) {
+      const { slug: resolved, error: slugError } = await resolvePostSlug(env, incoming, Number(id));
+      if (slugError) return json({ error: slugError }, 400);
+      await env.DB.prepare('UPDATE posts SET slug=?, slug_custom=1 WHERE id=?').bind(resolved, id).run();
+    }
+  }
 
   // password 字段未提交时保持原密码不变；提交空字符串表示清除；提交明文则重新哈希
   if (body.password === undefined) {
@@ -769,11 +824,42 @@ async function handleUpdatePost(request, env) {
   return json({ success: true });
 }
 
+/**
+ * 置顶 / 取消置顶文章（全站单篇置顶，存 settings.pinned_post_id）
+ * body: { id } —— id 为空串表示取消置顶
+ */
+async function handlePinPost(request, env) {
+  let body;
+  try { body = await request.json(); } catch { return json({ error: '参数格式错误' }, 400); }
+  const raw = body && body.id != null ? String(body.id).trim() : '';
+
+  if (raw === '') {
+    await saveSettings(env, { pinned_post_id: '' });
+    await purgePublicCaches(request);
+    return json({ success: true, pinned_post_id: '' });
+  }
+
+  if (!/^\d+$/.test(raw) || Number(raw) < 1) return json({ error: '无效的文章 ID' }, 400);
+  const post = await env.DB.prepare("SELECT id FROM posts WHERE id=? AND status != 'trash'").bind(Number(raw)).first();
+  if (!post) return json({ error: '文章不存在或已删除' }, 404);
+
+  await saveSettings(env, { pinned_post_id: raw });
+  await purgePublicCaches(request);
+  return json({ success: true, pinned_post_id: raw });
+}
+
 async function handleDeletePost(request, env) {
   const id = new URL(request.url).searchParams.get('id');
   if (!id) return errorResponse('缺少 id', 400);
 
   await env.DB.prepare("UPDATE posts SET status='trash' WHERE id=?").bind(id).run();
+
+  // 被删文章若正在置顶，同步清除置顶设置，避免首页置顶静默失效
+  const pinned = await env.DB.prepare("SELECT value FROM settings WHERE key='pinned_post_id'").first();
+  if (pinned?.value && String(pinned.value) === String(id)) {
+    await saveSettings(env, { pinned_post_id: '' });
+  }
+
   await purgePublicCaches(request);
   return json({ success: true });
 }
